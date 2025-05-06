@@ -1,4 +1,4 @@
-﻿# LLM API Proxy and Manager
+﻿# LLM API Proxy and Routing Manager
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![.NET Version](https://img.shields.io/badge/.NET-8.0-blueviolet)](https://dotnet.microsoft.com/download/dotnet/8.0)
@@ -67,14 +67,14 @@ The LLM API Proxy and Manager is a C#-based ASP.NET Core application designed to
     dotnet restore
     ```
 3.  **Configure Port (Optional):**
-    The application is configured by default to run on port `1852`. You can change this in `appsettings.json`:
+    The application is configured by default to run on port `7548`. You can change this in `appsettings.json`:
     ```json
     {
       // ...
       "Kestrel": {
         "Endpoints": {
           "Http": {
-            "Url": "http://*:1852" // Change 1852 to your desired port
+            "Url": "http://*:7548" // Change 7548 to your desired port
           }
         }
       }
@@ -85,11 +85,11 @@ The LLM API Proxy and Manager is a C#-based ASP.NET Core application designed to
     ```bash
     dotnet run
     ```
-    The proxy will start, typically listening on `http://localhost:1852`.
+    The proxy will start, typically listening on `http://localhost:7548`.
 
 ### Initial Configuration (Admin UI)
 
-1.  **Access the Admin UI:** Open your web browser and navigate to `http://localhost:1852/admin`.
+1.  **Access the Admin UI:** Open your web browser and navigate to `http://localhost:7548/admin`.
 2.  **Default Configuration:** If this is the first run or `config/dynamic_routing.json` is empty/missing, some default debug configurations will be loaded and saved. You can modify or delete these.
 3.  **Add a Model Configuration:**
     *   Enter a **Model Name** (e.g., `gpt-4o`, `phi-3-mini`). This is the identifier clients will use in their requests.
