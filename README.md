@@ -1,6 +1,6 @@
-﻿<div style="text-align: center;">
-  <img src="Assets/logo.png" alt="Proxy Logo" height="250">
-</div>
+<p align="center">
+  <img src="Assets/logo.png" alt="Proxy Logo" height="250" style="display: block; margin-left: auto; margin-right: auto;"/>
+</p>
 
 # LLM API Proxy and Routing Manager
 
