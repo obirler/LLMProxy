@@ -1,4 +1,8 @@
-﻿# LLM API Proxy and Routing Manager
+﻿<div style="text-align: center;">
+  <img src="Assets/logo.png" alt="Proxy Logo" height="250">
+</div>
+
+# LLM API Proxy and Routing Manager
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![.NET Version](https://img.shields.io/badge/.NET-8.0-blueviolet)](https://dotnet.microsoft.com/download/dotnet/8.0)
