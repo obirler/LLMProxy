@@ -4,142 +4,73 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LLM Proxy Admin</title>
+
+    <!-- Link to Local Bootstrap CSS -->
     <link href="/lib/bootstrap/css/bootstrap.css" rel="stylesheet">
+
+    <!-- Optional: Add a custom CSS file for minor tweaks if Bootstrap isn't enough -->
+    <!-- <link href="/css/admin-custom.css" rel="stylesheet"> -->
+
     <style>
-        body {
-            font-family: sans-serif;
-            line-height: 1.6;
-            padding: 20px;
-            max-width: 1000px;
-            margin: auto;
-        }
-
+        /* Minimal custom styles, if any needed at all */
         .model-config {
-            border: 1px solid #ccc;
-            padding: 15px;
-            margin-bottom: 20px;
-            border-radius: 5px;
-            background-color: #f9f9f9;
+            /* Bootstrap card class can replace most of this */
         }
-
-        .model-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 10px;
-        }
-
-            .model-header h2 {
-                margin: 0;
-            }
 
         .backend {
-            border: 1px solid #ddd;
-            padding: 10px;
-            margin-bottom: 10px;
-            border-radius: 3px;
-            background-color: #fff;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 3px;
-            font-weight: bold;
-        }
-
-        input[type="text"], input[type="number"], select, textarea {
-            width: 95%;
-            padding: 8px;
-            margin-bottom: 8px;
-            border: 1px solid #ccc;
-            border-radius: 3px;
-        }
-
-        textarea {
-            height: 60px;
-        }
-
-        button {
-            padding: 8px 15px;
-            margin-right: 5px;
-            cursor: pointer;
-            border: none;
-            border-radius: 3px;
-        }
-
-        .btn-save {
-            background-color: #28a745;
-            color: white;
-        }
-
-        .btn-delete {
-            background-color: #dc3545;
-            color: white;
-        }
-
-        .btn-add {
-            background-color: #007bff;
-            color: white;
-        }
-
-        .btn-delete-model {
-            background-color: #ffc107;
-            color: black;
-        }
-
-        .backend-actions {
-            margin-top: 10px;
-        }
-
-        #add-model-section {
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 2px solid #007bff;
-        }
-
-        .error {
-            color: red;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-
-        .success {
-            color: green;
-            font-weight: bold;
-            margin-bottom: 10px;
+            /* Bootstrap card can replace most of this */
         }
     </style>
 </head>
 <body>
-    <script src="/lib/bootstrap/js/bootstrap.js"></script>
+    <div class="container mt-4 mb-5">
+        <header class="pb-3 mb-4 border-bottom">
+            <h1 class="h3">LLM Proxy Configuration</h1>
+        </header>
 
-    <h1>LLM Proxy Configuration</h1>
-    <div id="status-message"></div>
-    <div id="config-container">
-        <!-- Configuration will be loaded here -->
-        Loading configuration...
-    </div>
+        <div id="status-message" role="alert" class="mb-3"></div> <!-- Will be populated by JS -->
 
-    <div id="add-model-section">
-        <h2>Add New Model</h2>
-        <label for="new-model-name">Model Name (e.g., gpt-4o):</label>
-        <input type="text" id="new-model-name" placeholder="Enter unique model name">
-        <button class="btn-add" onclick="addEmptyModel()">Add Model Section</button>
-    </div>
+        <div id="config-container" class="mb-4">
+            <div class="text-center">
+                <div class="spinner-border" role="status">
+                    <span class="visually-hidden">Loading configuration...</span>
+                </div>
+                <p class="mt-2">Loading configuration...</p>
+            </div>
+        </div>
+
+        <div id="add-model-section" class="mt-5 pt-4 border-top">
+            <h2 class="h4">Add New Model</h2>
+            <div class="row g-3 align-items-end">
+                <div class="col-md-6">
+                    <label for="new-model-name" class="form-label">Model Name (e.g., gpt-4o):</label>
+                    <input type="text" id="new-model-name" class="form-control" placeholder="Enter unique model name">
+                </div>
+                <div class="col-md-6">
+                    <button class="btn btn-primary w-100" onclick="addEmptyModel()">Add Model Section</button>
+                </div>
+            </div>
+        </div>
+    </div> <!-- End .container -->
 
     <script>
         const configContainer = document.getElementById('config-container');
         const newModelNameInput = document.getElementById('new-model-name');
         const statusMessage = document.getElementById('status-message');
-        const apiUrl = '/admin/config'; // API endpoint base
+        const apiUrl = '/admin/config';
 
         // --- Data Loading and Rendering ---
 
         async function loadConfig() {
-            configContainer.innerHTML = 'Loading configuration...';
+            configContainer.innerHTML = `
+                    <div class="text-center">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">Loading configuration...</span>
+                        </div>
+                        <p class="mt-2">Loading configuration...</p>
+                    </div>`;
             statusMessage.textContent = '';
+            statusMessage.className = 'mb-3'; // Reset classes
             try {
                 const response = await fetch(apiUrl);
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -147,15 +78,15 @@
                 renderConfig(config.models || {});
             } catch (error) {
                 console.error('Error loading config:', error);
-                configContainer.innerHTML = '<p class="error">Error loading configuration. Check console.</p>';
+                configContainer.innerHTML = '<div class="alert alert-danger">Error loading configuration. Check console.</div>';
                 showStatus(`Error loading config: ${error.message}`, true);
             }
         }
 
         function renderConfig(models) {
-            configContainer.innerHTML = ''; // Clear previous content
+            configContainer.innerHTML = '';
             if (Object.keys(models).length === 0) {
-                configContainer.innerHTML = '<p>No models configured yet.</p>';
+                configContainer.innerHTML = '<div class="alert alert-info">No models configured yet. Use the form below to add one.</div>';
             } else {
                 for (const modelName in models) {
                     configContainer.appendChild(createModelElement(modelName, models[modelName]));
@@ -164,65 +95,86 @@
         }
 
         function createModelElement(modelName, modelConfig) {
-            const div = document.createElement('div');
-            div.className = 'model-config';
-            div.id = `model-${modelName}`; // Assign ID for easy access
+            const modelCard = document.createElement('div');
+            modelCard.className = 'card model-config mb-4 shadow-sm'; // Bootstrap card
+            modelCard.id = `model-${modelName}`;
 
-            div.innerHTML = `
-                                            <div class="model-header">
-                                                <h2>${modelName}</h2>
-                                                <div>
-                                                    <button class="btn-save" onclick="saveModelConfig('${modelName}')">Save Changes</button>
-                                                    <button class="btn-delete-model" onclick="deleteModelConfig('${modelName}')">Delete Model</button>
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <label for="strategy-${modelName}">Routing Strategy:</label>
-                                                <select id="strategy-${modelName}">
-                                                    <option value="RoundRobin" ${modelConfig.strategy === 'RoundRobin' ? 'selected' : ''}>Round Robin</option>
-                                                    <option value="Failover" ${modelConfig.strategy === 'Failover' ? 'selected' : ''}>Failover</option>
-                                                    <option value="Weighted" ${modelConfig.strategy === 'Weighted' ? 'selected' : ''}>Weighted</option>
-                                                </select>
-                                            </div>
-                                            <h3>Backends:</h3>
-                                            <div id="backends-${modelName}">
-                                                ${modelConfig.backends.map((backend, index) => createBackendElement(modelName, backend, index)).join('')}
-                                            </div>
-                                            <button class="btn-add" onclick="addBackend('${modelName}')">Add Backend</button>
-                                        `;
-            return div;
+            modelCard.innerHTML = `
+                    <div class="card-header">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0">${modelName}</h5>
+                            <div>
+                                <button class="btn btn-success btn-sm me-2" onclick="saveModelConfig('${modelName}')">Save Changes</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteModelConfig('${modelName}')">Delete Model</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <label for="strategy-${modelName}" class="form-label">Routing Strategy:</label>
+                                <select id="strategy-${modelName}" class="form-select">
+                                    <option value="RoundRobin" ${modelConfig.strategy === 'RoundRobin' ? 'selected' : ''}>Round Robin</option>
+                                    <option value="Failover" ${modelConfig.strategy === 'Failover' ? 'selected' : ''}>Failover</option>
+                                    <option value="Weighted" ${modelConfig.strategy === 'Weighted' ? 'selected' : ''}>Weighted</option>
+                                </select>
+                            </div>
+                        </div>
+                        <h6>Backends:</h6>
+                        <div id="backends-${modelName}" class="mb-3">
+                            ${modelConfig.backends.map((backend, index) => createBackendElement(modelName, backend, index)).join('') || '<p class="text-muted">No backends added yet.</p>'}
+                        </div>
+                        <button class="btn btn-outline-primary btn-sm" onclick="addBackend('${modelName}')">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-circle-fill me-1" viewBox="0 0 16 16">
+                              <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8.5 4.5a.5.5 0 0 0-1 0v3h-3a.5.5 0 0 0 0 1h3v3a.5.5 0 0 0 1 0v-3h3a.5.5 0 0 0 0-1h-3z" />
+                            </svg>
+                            Add Backend
+                        </button>
+                    </div>
+                `;
+            return modelCard;
         }
 
-        // --- Inside createBackendElement function in wwwroot/admin.html ---
         function createBackendElement(modelName, backend, index) {
-            // Use index as part of the ID temporarily for uniqueness within the model before saving
-            const backendId = `backend-${modelName}-${index}`;
+            const backendId = `backend-${modelName}-${index}`; // Temporary ID for new elements
+            // Use a unique ID based on backend name if it exists for existing elements
+            const elementId = backend.name ? `backend-${modelName}-${backend.name.replace(/[^a-zA-Z0-9-_]/g, '')}` : backendId;
+
             return `
-                            <div class="backend" id="${backendId}">
-                                <input type="hidden" class="backend-name-hidden" value="${backend.name || ''}"> <!-- Store original name if exists -->
-                                 <label for="name-${backendId}">Backend Name:</label>
-                                 <input type="text" id="name-${backendId}" class="backend-name" value="${backend.name || ''}" placeholder="Unique name (e.g., OpenAI-EU)">
-
-                                 <label for="baseUrl-${backendId}">Base URL:</label>
-                                 <input type="text" id="baseUrl-${backendId}" class="backend-baseUrl" value="${backend.baseUrl || ''}" placeholder="e.g., https://api.openai.com/v1">
-
-                                 <label for="apiKeys-${backendId}">API Keys (comma-separated):</label>
-                                 <textarea id="apiKeys-${backendId}" class="backend-apiKeys" placeholder="key1,key2,key3">${backend.apiKeys ? backend.apiKeys.join(',') : ''}</textarea>
-
-                                 <label for="backendModelName-${backendId}">Backend-Specific Model Name (Optional):</label>
-                                 <input type="text" id="backendModelName-${backendId}" class="backend-backendModelName" value="${backend.backendModelName || ''}" placeholder="e.g., model-name-gguf (overrides main model name)">
-
-                                 <label for="weight-${backendId}">Weight (for Weighted Strategy):</label>
-                                 <input type="number" id="weight-${backendId}" class="backend-weight" value="${backend.weight || 1}" min="1">
-
-                                 <label for="enabled-${backendId}">Enabled:</label>
-                                 <input type="checkbox" id="enabled-${backendId}" class="backend-enabled" ${backend.enabled ? 'checked' : ''}>
-
-                                 <div class="backend-actions">
-                                     <button class="btn-delete" onclick="removeBackendElement('${backendId}')">Remove This Backend</button>
-                                 </div>
+                    <div class="card backend mb-3" id="${elementId}">
+                        <div class="card-body">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label for="name-${elementId}" class="form-label">Backend Name:</label>
+                                    <input type="text" id="name-${elementId}" class="form-control form-control-sm backend-name" value="${backend.name || ''}" placeholder="Unique name (e.g., OpenAI-EU)">
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="baseUrl-${elementId}" class="form-label">Base URL:</label>
+                                    <input type="text" id="baseUrl-${elementId}" class="form-control form-control-sm backend-baseUrl" value="${backend.baseUrl || ''}" placeholder="e.g., https://api.openai.com/v1">
+                                </div>
+                                <div class="col-12">
+                                    <label for="apiKeys-${elementId}" class="form-label">API Keys (comma-separated):</label>
+                                    <textarea id="apiKeys-${elementId}" class="form-control form-control-sm backend-apiKeys" rows="2" placeholder="key1,key2,key3">${backend.apiKeys ? backend.apiKeys.join(',') : ''}</textarea>
+                                </div>
+                                <div class="col-md-8">
+                                    <label for="backendModelName-${elementId}" class="form-label">Backend-Specific Model Name (Optional):</label>
+                                    <input type="text" id="backendModelName-${elementId}" class="form-control form-control-sm backend-backendModelName" value="${backend.backendModelName || ''}" placeholder="Overrides main model name">
+                                </div>
+                                 <div class="col-md-4">
+                                    <label for="weight-${elementId}" class="form-label">Weight:</label>
+                                    <input type="number" id="weight-${elementId}" class="form-control form-control-sm backend-weight" value="${backend.weight || 1}" min="1">
+                                </div>
+                                <div class="col-12 d-flex justify-content-between align-items-center mt-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input backend-enabled" type="checkbox" role="switch" id="enabled-${elementId}" ${backend.enabled !== false ? 'checked' : ''}>
+                                        <label class="form-check-label" for="enabled-${elementId}">Enabled</label>
+                                    </div>
+                                    <button class="btn btn-outline-danger btn-sm" onclick="removeBackendElement('${elementId}')">Remove Backend</button>
+                                </div>
                             </div>
-                        `;
+                        </div>
+                    </div>
+                `;
         }
 
         // --- UI Actions ---
@@ -240,14 +192,20 @@
 
             const newModelConfig = { strategy: 'Failover', backends: [] };
             configContainer.appendChild(createModelElement(modelName, newModelConfig));
-            newModelNameInput.value = ''; // Clear input
+            newModelNameInput.value = '';
             showStatus(`Added section for model "${modelName}". Add backends and click Save.`, false);
         }
 
         function addBackend(modelName) {
             const backendsDiv = document.getElementById(`backends-${modelName}`);
-            const newIndex = backendsDiv.children.length; // Simple way to get a unique index for the new element
-            const newBackend = { name: '', baseUrl: '', apiKeys: [], weight: 1, enabled: true };
+            // Check if the "No backends added yet" placeholder is there
+            const placeholder = backendsDiv.querySelector('p.text-muted');
+            if (placeholder) {
+                placeholder.remove();
+            }
+
+            const newIndex = backendsDiv.querySelectorAll('.backend').length;
+            const newBackend = { name: '', baseUrl: '', apiKeys: [], backendModelName: null, weight: 1, enabled: true };
             const backendHtml = createBackendElement(modelName, newBackend, newIndex);
             backendsDiv.insertAdjacentHTML('beforeend', backendHtml);
         }
@@ -255,7 +213,11 @@
         function removeBackendElement(backendElementId) {
             const backendElement = document.getElementById(backendElementId);
             if (backendElement) {
+                const parentBackendsDiv = backendElement.parentElement;
                 backendElement.remove();
+                if (parentBackendsDiv && parentBackendsDiv.querySelectorAll('.backend').length === 0) {
+                    parentBackendsDiv.innerHTML = '<p class="text-muted">No backends added yet.</p>';
+                }
             }
         }
 
@@ -263,61 +225,44 @@
 
         async function saveModelConfig(modelName) {
             statusMessage.textContent = 'Saving...';
+            statusMessage.className = 'alert alert-info mb-3'; // Indicate saving
+
             const modelDiv = document.getElementById(`model-${modelName}`);
+            if (!modelDiv) {
+                showStatus(`Error: Could not find model element for ${modelName}.`, true);
+                return;
+            }
             const strategy = modelDiv.querySelector(`#strategy-${modelName}`).value;
             const backendElements = modelDiv.querySelectorAll(`#backends-${modelName} .backend`);
 
             const backends = [];
             let hasError = false;
-            backendElements.forEach((be, index) => {
-                const backendId = be.id;
+            backendElements.forEach((be) => {
                 const name = be.querySelector('.backend-name').value.trim();
                 const baseUrl = be.querySelector('.backend-baseUrl').value.trim();
                 const apiKeysRaw = be.querySelector('.backend-apiKeys').value.trim();
+                const backendModelName = be.querySelector('.backend-backendModelName').value.trim() || null;
                 const weight = parseInt(be.querySelector('.backend-weight').value, 10);
                 const enabled = be.querySelector('.backend-enabled').checked;
-                const backendModelName = be.querySelector('.backend-backendModelName').value.trim() || null; // Set to null if empty
 
                 if (!name) {
                     showStatus(`Error: Backend name is required for all backends in model ${modelName}.`, true);
-                    hasError = true;
-                    return; // Stop processing this backend
+                    hasError = true; return;
                 }
                 if (!baseUrl) {
                     showStatus(`Error: Base URL is required for backend "${name}" in model ${modelName}.`, true);
-                    hasError = true;
-                    return; // Stop processing this backend
+                    hasError = true; return;
                 }
-
-                if (hasError) return; // Stop processing this backend if validation failed earlier
-
                 const apiKeys = apiKeysRaw ? apiKeysRaw.split(',').map(k => k.trim()).filter(k => k) : [];
 
-                if (apiKeys.length === 0) {
-                    showStatus(`Warning: No API keys provided for backend "${name}" in model ${modelName}. It might not work.`, false); // Warning, not error
-                }
-
-                backends.push({
-                    name: name,
-                    baseUrl: baseUrl,
-                    apiKeys: apiKeys,
-                    backendModelName: backendModelName,
-                    weight: isNaN(weight) || weight < 1 ? 1 : weight, // Default to 1 if invalid
-                    enabled: enabled
-                });
+                backends.push({ name, baseUrl, apiKeys, backendModelName, weight: isNaN(weight) || weight < 1 ? 1 : weight, enabled });
             });
 
-            if (hasError) {
-                return; // Don't save if validation failed
-            }
+            if (hasError) return;
 
-            const payload = {
-                strategy: strategy,
-                backends: backends
-            };
+            const payload = { strategy, backends };
 
             try {
-                // Use POST to /admin/config/{modelName} to update/create
                 const response = await fetch(`${apiUrl}/${encodeURIComponent(modelName)}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -325,16 +270,13 @@
                 });
 
                 if (!response.ok) {
-                    const errorData = await response.text();
-                    throw new Error(`HTTP error! status: ${response.status} - ${errorData}`);
+                    const errorText = await response.text();
+                    throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
                 }
-
                 showStatus(`Successfully saved configuration for model ${modelName}.`, false);
-                // Optional: Reload config to ensure UI matches saved state, especially if backend assigns names/IDs
-                // await loadConfig();
             } catch (error) {
                 console.error(`Error saving config for ${modelName}:`, error);
-                showStatus(`Error saving config for ${modelName}: ${error.message}`, true);
+                showStatus(`Error saving config for ${modelName}: ${error.message || 'Unknown error'}`, true);
             }
         }
 
@@ -343,44 +285,36 @@
                 return;
             }
             statusMessage.textContent = 'Deleting...';
+            statusMessage.className = 'alert alert-info mb-3';
             try {
-                const response = await fetch(`${apiUrl}/${encodeURIComponent(modelName)}`, {
-                    method: 'DELETE'
-                });
-
+                const response = await fetch(`${apiUrl}/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
                 if (!response.ok) {
-                    const errorData = await response.text();
-                    throw new Error(`HTTP error! status: ${response.status} - ${errorData}`);
+                    const errorText = await response.text();
+                    throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
                 }
-
                 showStatus(`Successfully deleted configuration for model ${modelName}.`, false);
-                // Remove the element from the page
                 document.getElementById(`model-${modelName}`)?.remove();
-                // If no models left, show message
                 if (configContainer.children.length === 0) {
-                    configContainer.innerHTML = '<p>No models configured yet.</p>';
+                    configContainer.innerHTML = '<div class="alert alert-info">No models configured yet. Use the form below to add one.</div>';
                 }
-
             } catch (error) {
                 console.error(`Error deleting config for ${modelName}:`, error);
-                showStatus(`Error deleting config for ${modelName}: ${error.message}`, true);
+                showStatus(`Error deleting config for ${modelName}: ${error.message || 'Unknown error'}`, true);
             }
         }
 
         function showStatus(message, isError = false) {
             statusMessage.textContent = message;
-            statusMessage.className = isError ? 'error' : 'success';
-            // Clear message after a few seconds
-            setTimeout(() => {
-                if (statusMessage.textContent === message) { // Only clear if it's the same message
-                    statusMessage.textContent = '';
-                    statusMessage.className = '';
-                }
-            }, 5000);
+            statusMessage.className = `alert ${isError ? 'alert-danger' : 'alert-success'} mb-3`;
+            // Auto-clear can be added if desired
+            // setTimeout(() => { /* ... */ }, 5000);
         }
 
         // --- Initial Load ---
         document.addEventListener('DOMContentLoaded', loadConfig);
     </script>
+
+    <!-- Link to Local Bootstrap JS Bundle (Popper included) -->
+    <script src="/lib/bootstrap/js/bootstrap.js"></script>
 </body>
 </html>
