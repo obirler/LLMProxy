@@ -11,10 +11,7 @@ namespace LLMProxy.Services;
 
 public class DispatcherService
 {
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly RoutingService _routingService;
-    private readonly ILogger<DispatcherService> _logger;
-    private const string BackendClientName = "LLMBackendClient";
+    #region Constructors
 
     public DispatcherService(IHttpClientFactory httpClientFactory, RoutingService routingService, ILogger<DispatcherService> logger)
     {
@@ -22,6 +19,22 @@ public class DispatcherService
         _routingService = routingService;
         _logger = logger;
     }
+
+    #endregion Constructors
+
+    #region Fields
+
+    private const string BackendClientName = "LLMBackendClient";
+
+    private readonly IHttpClientFactory _httpClientFactory;
+
+    private readonly RoutingService _routingService;
+
+    private readonly ILogger<DispatcherService> _logger;
+
+    #endregion Fields
+
+    #region Methods
 
     public async Task DispatchRequestAsync(HttpContext context)
     {
@@ -75,8 +88,10 @@ public class DispatcherService
 
         while (true)
         {
+            // Get the next backend based on the strategy
             var (selectedBackend, apiKey) = _routingService.GetNextBackendAndKey(generalModelName, triedBackends);
 
+            // *** THIS IS THE CRITICAL CHECK FOR EXHAUSTING BACKENDS ***
             if (selectedBackend == null || string.IsNullOrEmpty(apiKey))
             {
                 _logger.LogError("All backends failed or no backend/key available for model {ModelName}.", generalModelName);
@@ -182,11 +197,12 @@ public class DispatcherService
 
                 if (response.IsSuccessStatusCode)
                 {
+                    // ... (Relay successful response) ...
                     _logger.LogInformation("Received successful response ({StatusCode}) from {Backend} for model '{ModelNameUsed}'", response.StatusCode, selectedBackend.Name, modelNameToLog);
                     await RelayResponseAsync(context, response, isStreaming);
                     return;
                 }
-                else
+                else // Non-success status code from backend
                 {
                     _logger.LogWarning("Backend {Backend} returned non-success status code: {StatusCode} for model '{ModelNameUsed}'",
                                            selectedBackend.Name, response.StatusCode, modelNameToLog);
@@ -217,6 +233,8 @@ public class DispatcherService
                 if (context.RequestAborted.IsCancellationRequested)
                 {
                     _logger.LogInformation("Client cancelled the request to {Path}", requestPath);
+                    response?.Dispose();
+                    return; // EXIT: Client cancelled
                 }
                 else // Timeout
                 {
@@ -224,8 +242,6 @@ public class DispatcherService
                     response?.Dispose();
                     continue; // Try next backend on timeout
                 }
-                // Don't continue loop if client cancelled
-                return;
             }
             catch (Exception ex) // Catch broader exceptions
             {
@@ -293,4 +309,6 @@ public class DispatcherService
         }
         return null;
     }
+
+    #endregion Methods
 }
