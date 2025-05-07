@@ -4,10 +4,21 @@ using System.Text.Json.Serialization;
 using LLMProxy.Models; // Required for RoutingConfig, ModelRoutingConfig, ModelInfo, ModelListResponse etc.
 using LLMProxy.Services; // Required for DynamicConfigurationService, RoutingService, DispatcherService
 
+using LLMProxy.Data;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc; // Required for FromBody attribute and Results class
+using Microsoft.AspNetCore.Http;
 
 // --- 1. Application Builder Setup ---
 var builder = WebApplication.CreateBuilder(args);
+
+// --- Add Database Context ---
+var dbPath = Path.Combine(AppContext.BaseDirectory, "data", "llmproxy_log.db");
+// Ensure directory exists
+Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+
+builder.Services.AddDbContext<ProxyDbContext>(options =>
+    options.UseSqlite($"Data Source={dbPath}"));
 
 // --- 2. Configuration Sources ---
 // Reads appsettings.json, environment-specific appsettings, and environment variables.
@@ -76,6 +87,26 @@ builder.Services.AddCors(options =>
 
 // --- 5. Build the Application ---
 var app = builder.Build();
+
+// --- Apply Migrations (Important!) ---
+// This should be done carefully in production (e.g., during deployment script)
+// For development, this is convenient.
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+    try
+    {
+        var context = services.GetRequiredService<ProxyDbContext>();
+        context.Database.Migrate(); // Applies pending migrations
+        app.Logger.LogInformation("Database migrations applied successfully or no migrations pending.");
+    }
+    catch (Exception ex)
+    {
+        var logger = services.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "An error occurred while migrating the database.");
+        // Optionally, throw to stop startup if DB is critical
+    }
+}
 
 // --- 6. Middleware Pipeline Configuration ---
 // Order is important here!
@@ -238,6 +269,62 @@ var proxyPostHandler = async (HttpContext context, DispatcherService dispatcher,
 proxyApiGroup.MapPost("/chat/completions", proxyPostHandler).WithName("ProxyChatCompletions");
 proxyApiGroup.MapPost("/completions", proxyPostHandler).WithName("ProxyCompletions"); // Legacy
 proxyApiGroup.MapPost("/embeddings", proxyPostHandler).WithName("ProxyEmbeddings");
+
+// --- Log API Endpoint ---
+var logApiGroup = app.MapGroup("/admin/logs").WithTags("Admin Logs API");
+// .RequireAuthorization("AdminPolicy"); // Secure this!
+
+logApiGroup.MapGet("/", async (HttpContext httpContext, ProxyDbContext dbContext, int start = 0, int length = 10, string? search = null) =>
+{
+    // Basic pagination and search
+    var query = dbContext.ApiLogEntries.AsQueryable();
+
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        search = search.ToLower();
+        query = query.Where(l =>
+            (l.RequestPath != null && l.RequestPath.ToLower().Contains(search)) ||
+            (l.RequestedModel != null && l.RequestedModel.ToLower().Contains(search)) ||
+            (l.UpstreamBackendName != null && l.UpstreamBackendName.ToLower().Contains(search)) ||
+            (l.ErrorMessage != null && l.ErrorMessage.ToLower().Contains(search))
+        );
+    }
+
+    var totalRecords = await query.CountAsync();
+    var data = await query.OrderByDescending(l => l.Timestamp)
+                          .Skip(start)
+                          .Take(length)
+                          .Select(l => new // Select only needed fields for the summary list
+                          {
+                              l.Id,
+                              Timestamp = l.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"), // Format for display
+                              l.RequestPath,
+                              l.RequestMethod,
+                              l.RequestedModel,
+                              l.UpstreamBackendName,
+                              l.UpstreamStatusCode,
+                              l.ProxyResponseStatusCode,
+                              l.WasSuccess,
+                              BriefError = l.ErrorMessage != null ? (l.ErrorMessage.Length > 70 ? l.ErrorMessage.Substring(0, 70) + "..." : l.ErrorMessage) : null
+                          })
+                          .ToListAsync();
+
+    var draw = httpContext.Request.Query["draw"].FirstOrDefault();
+
+    return Results.Ok(new
+    {
+        draw = Convert.ToInt32(draw),
+        recordsTotal = totalRecords,
+        recordsFiltered = totalRecords, // Simplified for now; full server-side search needs more
+        data = data
+    });
+});
+
+logApiGroup.MapGet("/{id:long}", async (long id, ProxyDbContext dbContext) =>
+{
+    var logEntry = await dbContext.ApiLogEntries.FindAsync(id);
+    return logEntry == null ? Results.NotFound() : Results.Ok(logEntry); // Return full entry for detail view
+});
 
 // --- 8. Run the Application ---
 app.Run(); // Starts listening for incoming HTTP requests

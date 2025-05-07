@@ -8,35 +8,31 @@
     <!-- Link to Local Bootstrap CSS -->
     <link href="/lib/bootstrap/css/bootstrap.css" rel="stylesheet">
 
-    <!-- Optional: Add a custom CSS file for minor tweaks if Bootstrap isn't enough -->
-    <!-- <link href="/css/admin-custom.css" rel="stylesheet"> -->
-
     <style>
-        /* Minimal custom styles, if any needed at all */
-        .model-config {
-            /* Bootstrap card class can replace most of this */
-        }
-
-        .backend {
-            /* Bootstrap card can replace most of this */
+        /* Minimal custom styles for spinner inside button */
+        .btn .spinner-border {
+            width: 1em;
+            height: 1em;
+            border-width: .15em;
+            vertical-align: -0.125em; /* Align with text */
         }
     </style>
 </head>
 <body>
     <div class="container mt-4 mb-5">
-        <header class="pb-3 mb-4 border-bottom">
+        <!-- In admin.html, perhaps near the top -->
+        <div class="d-flex justify-content-between align-items-center mb-3">
             <h1 class="h3">LLM Proxy Configuration</h1>
-        </header>
+            <a href="/log.html" class="btn btn-info">View API Logs</a>
+        </div>
 
-        <div id="status-message" role="alert" class="mb-3"></div> <!-- Will be populated by JS -->
+        <!-- Container for dynamically generated alerts (toasts/notifications) -->
+        <div id="status-message-container" class="position-fixed top-0 end-0 p-3" style="z-index: 1100">
+            <!-- Alerts will be prepended here by JavaScript -->
+        </div>
 
         <div id="config-container" class="mb-4">
-            <div class="text-center">
-                <div class="spinner-border" role="status">
-                    <span class="visually-hidden">Loading configuration...</span>
-                </div>
-                <p class="mt-2">Loading configuration...</p>
-            </div>
+            <!-- Initial loading state will be set by JavaScript -->
         </div>
 
         <div id="add-model-section" class="mt-5 pt-4 border-top">
@@ -47,44 +43,97 @@
                     <input type="text" id="new-model-name" class="form-control" placeholder="Enter unique model name">
                 </div>
                 <div class="col-md-6">
-                    <button class="btn btn-primary w-100" onclick="addEmptyModel()">Add Model Section</button>
+                    <button id="add-model-button" class="btn btn-primary w-100" onclick="addEmptyModel()">Add Model Section</button>
                 </div>
             </div>
         </div>
-    </div> <!-- End .container -->
+    </div>
+
+    <div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-labelledby="deleteConfirmModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="deleteConfirmModalLabel">Confirm Deletion</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    Are you sure you want to delete the configuration for model: <strong id="modelNameToDelete"></strong>? This action cannot be undone.
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-danger" id="confirmDeleteButton">Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script>
-        const configContainer = document.getElementById('config-container');
-        const newModelNameInput = document.getElementById('new-model-name');
-        const statusMessage = document.getElementById('status-message');
-        const apiUrl = '/admin/config';
+        // Declare variables for DOM elements; initialize them after DOM is loaded
+        let configContainer;
+        let newModelNameInput;
+        let statusMessageContainer;
+        const apiUrl = '/admin/config'; // API endpoint base
+
+        let deleteModalInstance = null; // To store the Bootstrap Modal instance
+        let modelPendingDeletion = null;
+        let deleteButtonTrigger = null; // To store the button that triggered the modal
+
+        // Helper function to show/hide spinner on a button
+        function toggleButtonSpinner(buttonElement, show) {
+            if (!buttonElement) return;
+
+            if (show) {
+                // Store original content if not already stored
+                if (!buttonElement.dataset.originalHTML) {
+                    buttonElement.dataset.originalHTML = buttonElement.innerHTML;
+                }
+                buttonElement.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Working...`;
+                buttonElement.disabled = true;
+            } else {
+                // Restore original content if it was stored
+                if (buttonElement.dataset.originalHTML) {
+                    buttonElement.innerHTML = buttonElement.dataset.originalHTML;
+                }
+                buttonElement.disabled = false;
+                // Clean up dataset property
+                delete buttonElement.dataset.originalHTML;
+            }
+        }
 
         // --- Data Loading and Rendering ---
-
         async function loadConfig() {
+            if (!configContainer) {
+                console.error("loadConfig: configContainer not initialized.");
+                return;
+            }
             configContainer.innerHTML = `
-                    <div class="text-center">
-                        <div class="spinner-border" role="status">
-                            <span class="visually-hidden">Loading configuration...</span>
-                        </div>
-                        <p class="mt-2">Loading configuration...</p>
-                    </div>`;
-            statusMessage.textContent = '';
-            statusMessage.className = 'mb-3'; // Reset classes
+                                            <div class="text-center py-5">
+                                                <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
+                                                    <span class="visually-hidden">Loading configuration...</span>
+                                                </div>
+                                                <p class="mt-2 lead">Loading configuration...</p>
+                                            </div>`;
+
             try {
                 const response = await fetch(apiUrl);
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+                }
                 const config = await response.json();
                 renderConfig(config.models || {});
             } catch (error) {
                 console.error('Error loading config:', error);
-                configContainer.innerHTML = '<div class="alert alert-danger">Error loading configuration. Check console.</div>';
-                showStatus(`Error loading config: ${error.message}`, true);
+                if (configContainer) {
+                    configContainer.innerHTML = `<div class="alert alert-danger">Error loading configuration. Details: ${error.message}. Check console.</div>`;
+                }
+                showStatus(`Error loading configuration: ${error.message}`, true);
             }
         }
 
         function renderConfig(models) {
-            configContainer.innerHTML = '';
+            if (!configContainer) return;
+            configContainer.innerHTML = ''; // Clear previous content (like spinner)
             if (Object.keys(models).length === 0) {
                 configContainer.innerHTML = '<div class="alert alert-info">No models configured yet. Use the form below to add one.</div>';
             } else {
@@ -96,118 +145,139 @@
 
         function createModelElement(modelName, modelConfig) {
             const modelCard = document.createElement('div');
-            modelCard.className = 'card model-config mb-4 shadow-sm'; // Bootstrap card
-            modelCard.id = `model-${modelName}`;
+            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, ''); // Sanitize for IDs
+            modelCard.className = 'card mb-4 shadow-sm';
+            modelCard.id = `model-${sanitizedModelName}`;
+
+            const saveButtonId = `save-btn-${sanitizedModelName}`;
+            const deleteButtonId = `delete-btn-${sanitizedModelName}`;
 
             modelCard.innerHTML = `
-                    <div class="card-header">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0">${modelName}</h5>
-                            <div>
-                                <button class="btn btn-success btn-sm me-2" onclick="saveModelConfig('${modelName}')">Save Changes</button>
-                                <button class="btn btn-danger btn-sm" onclick="deleteModelConfig('${modelName}')">Delete Model</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <div class="row mb-3">
-                            <div class="col-md-4">
-                                <label for="strategy-${modelName}" class="form-label">Routing Strategy:</label>
-                                <select id="strategy-${modelName}" class="form-select">
-                                    <option value="RoundRobin" ${modelConfig.strategy === 'RoundRobin' ? 'selected' : ''}>Round Robin</option>
-                                    <option value="Failover" ${modelConfig.strategy === 'Failover' ? 'selected' : ''}>Failover</option>
-                                    <option value="Weighted" ${modelConfig.strategy === 'Weighted' ? 'selected' : ''}>Weighted</option>
-                                </select>
-                            </div>
-                        </div>
-                        <h6>Backends:</h6>
-                        <div id="backends-${modelName}" class="mb-3">
-                            ${modelConfig.backends.map((backend, index) => createBackendElement(modelName, backend, index)).join('') || '<p class="text-muted">No backends added yet.</p>'}
-                        </div>
-                        <button class="btn btn-outline-primary btn-sm" onclick="addBackend('${modelName}')">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-circle-fill me-1" viewBox="0 0 16 16">
-                              <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8.5 4.5a.5.5 0 0 0-1 0v3h-3a.5.5 0 0 0 0 1h3v3a.5.5 0 0 0 1 0v-3h3a.5.5 0 0 0 0-1h-3z" />
-                            </svg>
-                            Add Backend
-                        </button>
-                    </div>
-                `;
+                                            <div class="card-header bg-light">
+                                                <div class="d-flex justify-content-between align-items-center">
+                                                    <h5 class="mb-0 text-primary">${modelName}</h5>
+                                                    <div>
+                                                        <button id="${saveButtonId}" class="btn btn-success btn-sm me-2" onclick="saveModelConfig('${modelName}', this)">
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-check-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" /></svg>
+                                                            Save Changes
+                                                        </button>
+                                                        <button id="${deleteButtonId}" class="btn btn-danger btn-sm" onclick="deleteModelConfig('${modelName}', this)">
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-trash3-fill me-1" viewBox="0 0 16 16"><path d="M11 1.5v1h3.5a.5.5 0 0 1 0 1h-.538l-.853 10.66A2 2 0 0 1 11.115 16h-6.23a2 2 0 0 1-1.994-1.84L2.038 3.5H1.5a.5.5 0 0 1 0-1H5v-1A1.5 1.5 0 0 1 6.5 0h3A1.5 1.5 0 0 1 11 1.5m-5 0v1h4v-1a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5M4.5 5.024l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06m3 0l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06m3 .535l-.5 8.5a.5.5 0 1 0 .998.06l.5-8.5a.5.5 0 1 0-.998-.06Z" /></svg>
+                                                            Delete Model
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="card-body">
+                                                <div class="row mb-3">
+                                                    <div class="col-md-4">
+                                                        <label for="strategy-${sanitizedModelName}" class="form-label">Routing Strategy:</label>
+                                                        <select id="strategy-${sanitizedModelName}" class="form-select form-select-sm">
+                                                            <option value="RoundRobin" ${modelConfig.strategy === 'RoundRobin' ? 'selected' : ''}>Round Robin</option>
+                                                            <option value="Failover" ${modelConfig.strategy === 'Failover' ? 'selected' : ''}>Failover</option>
+                                                            <option value="Weighted" ${modelConfig.strategy === 'Weighted' ? 'selected' : ''}>Weighted</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <h6>Backends:</h6>
+                                                <div id="backends-${sanitizedModelName}" class="mb-3 ps-2">
+                                                    ${modelConfig.backends.map((backend, index) => createBackendElement(modelName, backend, index)).join('') || '<p class="text-muted fst-italic">No backends added yet for this model.</p>'}
+                                                </div>
+                                                <button class="btn btn-outline-primary btn-sm" onclick="addBackend('${modelName}')">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8.5 4.5a.5.5 0 0 0-1 0v3h-3a.5.5 0 0 0 0 1h3v3a.5.5 0 0 0 1 0v-3h3a.5.5 0 0 0 0-1h-3z" /></svg>
+                                                    Add Backend
+                                                </button>
+                                            </div>
+                                        `;
             return modelCard;
         }
 
         function createBackendElement(modelName, backend, index) {
-            const backendId = `backend-${modelName}-${index}`; // Temporary ID for new elements
-            // Use a unique ID based on backend name if it exists for existing elements
-            const elementId = backend.name ? `backend-${modelName}-${backend.name.replace(/[^a-zA-Z0-9-_]/g, '')}` : backendId;
+            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+            // Use a unique ID based on backend name if it exists for existing elements, otherwise use index for new
+            const backendIdentifier = (backend.name || `new-${index}`).replace(/[^a-zA-Z0-9-_]/g, '');
+            const elementIdPrefix = `backend-${sanitizedModelName}-${backendIdentifier}`;
 
             return `
-                    <div class="card backend mb-3" id="${elementId}">
-                        <div class="card-body">
-                            <div class="row g-3">
-                                <div class="col-md-6">
-                                    <label for="name-${elementId}" class="form-label">Backend Name:</label>
-                                    <input type="text" id="name-${elementId}" class="form-control form-control-sm backend-name" value="${backend.name || ''}" placeholder="Unique name (e.g., OpenAI-EU)">
-                                </div>
-                                <div class="col-md-6">
-                                    <label for="baseUrl-${elementId}" class="form-label">Base URL:</label>
-                                    <input type="text" id="baseUrl-${elementId}" class="form-control form-control-sm backend-baseUrl" value="${backend.baseUrl || ''}" placeholder="e.g., https://api.openai.com/v1">
-                                </div>
-                                <div class="col-12">
-                                    <label for="apiKeys-${elementId}" class="form-label">API Keys (comma-separated):</label>
-                                    <textarea id="apiKeys-${elementId}" class="form-control form-control-sm backend-apiKeys" rows="2" placeholder="key1,key2,key3">${backend.apiKeys ? backend.apiKeys.join(',') : ''}</textarea>
-                                </div>
-                                <div class="col-md-8">
-                                    <label for="backendModelName-${elementId}" class="form-label">Backend-Specific Model Name (Optional):</label>
-                                    <input type="text" id="backendModelName-${elementId}" class="form-control form-control-sm backend-backendModelName" value="${backend.backendModelName || ''}" placeholder="Overrides main model name">
-                                </div>
-                                 <div class="col-md-4">
-                                    <label for="weight-${elementId}" class="form-label">Weight:</label>
-                                    <input type="number" id="weight-${elementId}" class="form-control form-control-sm backend-weight" value="${backend.weight || 1}" min="1">
-                                </div>
-                                <div class="col-12 d-flex justify-content-between align-items-center mt-3">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input backend-enabled" type="checkbox" role="switch" id="enabled-${elementId}" ${backend.enabled !== false ? 'checked' : ''}>
-                                        <label class="form-check-label" for="enabled-${elementId}">Enabled</label>
-                                    </div>
-                                    <button class="btn btn-outline-danger btn-sm" onclick="removeBackendElement('${elementId}')">Remove Backend</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                `;
+                                            <div class="card mb-3 border-light-subtle shadow-sm" id="${elementIdPrefix}">
+                                                <div class="card-body p-3">
+                                                    <div class="row g-3">
+                                                        <div class="col-md-6">
+                                                            <label for="name-${elementIdPrefix}" class="form-label">Backend Name:</label>
+                                                            <input type="text" id="name-${elementIdPrefix}" class="form-control form-control-sm backend-name" value="${backend.name || ''}" placeholder="Unique name (e.g., OpenAI-EU)">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label for="baseUrl-${elementIdPrefix}" class="form-label">Base URL:</label>
+                                                            <input type="text" id="baseUrl-${elementIdPrefix}" class="form-control form-control-sm backend-baseUrl" value="${backend.baseUrl || ''}" placeholder="e.g., https://api.openai.com/v1">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label for="apiKeys-${elementIdPrefix}" class="form-label">API Keys (comma-separated):</label>
+                                                            <textarea id="apiKeys-${elementIdPrefix}" class="form-control form-control-sm backend-apiKeys" rows="2" placeholder="key1,key2,key3">${backend.apiKeys ? backend.apiKeys.join(',') : ''}</textarea>
+                                                        </div>
+                                                        <div class="col-md-7">
+                                                            <label for="backendModelName-${elementIdPrefix}" class="form-label">Backend-Specific Model Name (Optional):</label>
+                                                            <input type="text" id="backendModelName-${elementIdPrefix}" class="form-control form-control-sm backend-backendModelName" value="${backend.backendModelName || ''}" placeholder="Overrides main model name">
+                                                        </div>
+                                                         <div class="col-md-2">
+                                                            <label for="weight-${elementIdPrefix}" class="form-label">Weight:</label>
+                                                            <input type="number" id="weight-${elementIdPrefix}" class="form-control form-control-sm backend-weight" value="${backend.weight || 1}" min="1">
+                                                        </div>
+                                                        <div class="col-md-3 d-flex align-items-end justify-content-between">
+                                                            <div class="form-check form-switch pt-1">
+                                                                <input class="form-check-input backend-enabled" type="checkbox" role="switch" id="enabled-${elementIdPrefix}" ${backend.enabled !== false ? 'checked' : ''}>
+                                                                <label class="form-check-label" for="enabled-${elementIdPrefix}">Enabled</label>
+                                                            </div>
+                                                            <button class="btn btn-outline-danger" onclick="removeBackendElement('${elementIdPrefix}')">
+                                                                Remove Backend
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        `;
         }
 
         // --- UI Actions ---
-
         function addEmptyModel() {
+            if (!newModelNameInput || !configContainer) return;
             const modelName = newModelNameInput.value.trim();
             if (!modelName) {
                 showStatus("Please enter a model name.", true);
+                newModelNameInput.focus();
                 return;
             }
-            if (document.getElementById(`model-${modelName}`)) {
-                showStatus(`Model "${modelName}" already exists. Edit the section above.`, true);
+            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+            if (document.getElementById(`model-${sanitizedModelName}`)) {
+                showStatus(`Model "<b>${modelName}</b>" already exists. Edit the section above.`, true);
                 return;
+            }
+
+            // Remove "No models configured yet" message if it exists
+            const noModelsAlert = configContainer.querySelector('.alert-info');
+            if (noModelsAlert && noModelsAlert.textContent.includes("No models configured yet")) {
+                noModelsAlert.remove();
             }
 
             const newModelConfig = { strategy: 'Failover', backends: [] };
             configContainer.appendChild(createModelElement(modelName, newModelConfig));
             newModelNameInput.value = '';
-            showStatus(`Added section for model "${modelName}". Add backends and click Save.`, false);
+            showStatus(`Added section for model "<b>${modelName}</b>". Add backends and click Save.`, false);
         }
 
         function addBackend(modelName) {
-            const backendsDiv = document.getElementById(`backends-${modelName}`);
-            // Check if the "No backends added yet" placeholder is there
+            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+            const backendsDiv = document.getElementById(`backends-${sanitizedModelName}`);
+            if (!backendsDiv) {
+                console.error(`addBackend: Could not find backends container for model ${modelName}`);
+                return;
+            }
             const placeholder = backendsDiv.querySelector('p.text-muted');
             if (placeholder) {
                 placeholder.remove();
             }
-
-            const newIndex = backendsDiv.querySelectorAll('.backend').length;
+            const newIndex = backendsDiv.querySelectorAll('.card.backend').length;
             const newBackend = { name: '', baseUrl: '', apiKeys: [], backendModelName: null, weight: 1, enabled: true };
-            const backendHtml = createBackendElement(modelName, newBackend, newIndex);
-            backendsDiv.insertAdjacentHTML('beforeend', backendHtml);
+            backendsDiv.insertAdjacentHTML('beforeend', createBackendElement(modelName, newBackend, newIndex));
         }
 
         function removeBackendElement(backendElementId) {
@@ -215,29 +285,28 @@
             if (backendElement) {
                 const parentBackendsDiv = backendElement.parentElement;
                 backendElement.remove();
-                if (parentBackendsDiv && parentBackendsDiv.querySelectorAll('.backend').length === 0) {
-                    parentBackendsDiv.innerHTML = '<p class="text-muted">No backends added yet.</p>';
+                if (parentBackendsDiv && parentBackendsDiv.querySelectorAll('.card.backend').length === 0) {
+                    parentBackendsDiv.innerHTML = '<p class="text-muted fst-italic">No backends added yet for this model.</p>';
                 }
             }
         }
 
         // --- API Interaction ---
+        async function saveModelConfig(modelName, buttonElement) {
+            if (!modelName || !buttonElement) { /* ... error handling ... */ return; }
+            toggleButtonSpinner(buttonElement, true);
+            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+            const modelDiv = document.getElementById(`model-${sanitizedModelName}`);
+            if (!modelDiv) { /* ... error handling ... */ toggleButtonSpinner(buttonElement, false); return; }
 
-        async function saveModelConfig(modelName) {
-            statusMessage.textContent = 'Saving...';
-            statusMessage.className = 'alert alert-info mb-3'; // Indicate saving
-
-            const modelDiv = document.getElementById(`model-${modelName}`);
-            if (!modelDiv) {
-                showStatus(`Error: Could not find model element for ${modelName}.`, true);
-                return;
-            }
-            const strategy = modelDiv.querySelector(`#strategy-${modelName}`).value;
-            const backendElements = modelDiv.querySelectorAll(`#backends-${modelName} .backend`);
-
+            const strategy = modelDiv.querySelector(`#strategy-${sanitizedModelName}`).value;
+            const backendElementsContainer = modelDiv.querySelector(`#backends-${sanitizedModelName}`);
+            const backendElements = backendElementsContainer.querySelectorAll('.card.backend');
             const backends = [];
-            let hasError = false;
-            backendElements.forEach((be) => {
+            let hasValidationError = false;
+
+            backendElements.forEach((be, index) => {
+                if (hasValidationError) return;
                 const name = be.querySelector('.backend-name').value.trim();
                 const baseUrl = be.querySelector('.backend-baseUrl').value.trim();
                 const apiKeysRaw = be.querySelector('.backend-apiKeys').value.trim();
@@ -245,76 +314,145 @@
                 const weight = parseInt(be.querySelector('.backend-weight').value, 10);
                 const enabled = be.querySelector('.backend-enabled').checked;
 
-                if (!name) {
-                    showStatus(`Error: Backend name is required for all backends in model ${modelName}.`, true);
-                    hasError = true; return;
-                }
-                if (!baseUrl) {
-                    showStatus(`Error: Base URL is required for backend "${name}" in model ${modelName}.`, true);
-                    hasError = true; return;
-                }
+                if (!name) { showStatus(`Error: Backend Name is required for backend #${index + 1} in model <b>${modelName}</b>.`, true); hasValidationError = true; return; }
+                if (!baseUrl) { showStatus(`Error: Base URL is required for backend "<b>${name}</b>" in model <b>${modelName}</b>.`, true); hasValidationError = true; return; }
                 const apiKeys = apiKeysRaw ? apiKeysRaw.split(',').map(k => k.trim()).filter(k => k) : [];
-
                 backends.push({ name, baseUrl, apiKeys, backendModelName, weight: isNaN(weight) || weight < 1 ? 1 : weight, enabled });
             });
 
-            if (hasError) return;
-
+            if (hasValidationError) { toggleButtonSpinner(buttonElement, false); return; }
             const payload = { strategy, backends };
 
             try {
                 const response = await fetch(`${apiUrl}/${encodeURIComponent(modelName)}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
                 });
-
+                const responseText = await response.text();
                 if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+                    let errorMessage = responseText; try { const errorJson = JSON.parse(responseText); errorMessage = errorJson.detail || errorJson.title || errorJson.error || JSON.stringify(errorJson); } catch (e) { /* use raw text */ }
+                    throw new Error(`HTTP error! status: ${response.status} - ${errorMessage}`);
                 }
-                showStatus(`Successfully saved configuration for model ${modelName}.`, false);
+                showStatus(`Successfully saved configuration for model <b>${modelName}</b>.`, false);
             } catch (error) {
                 console.error(`Error saving config for ${modelName}:`, error);
-                showStatus(`Error saving config for ${modelName}: ${error.message || 'Unknown error'}`, true);
+                showStatus(`Error saving config for <b>${modelName}</b>: ${error.message || 'Unknown error'}`, true);
+            } finally {
+                toggleButtonSpinner(buttonElement, false);
             }
         }
 
-        async function deleteModelConfig(modelName) {
-            if (!confirm(`Are you sure you want to delete the entire configuration for model "${modelName}"?`)) {
+        async function deleteModelConfig(modelName, buttonElement) {
+            if (!modelName) {
+                showStatus("Model name not provided for deletion.", true);
                 return;
             }
-            statusMessage.textContent = 'Deleting...';
-            statusMessage.className = 'alert alert-info mb-3';
+
+            // Store the model name and trigger button for later use by the modal's confirm button
+            modelPendingDeletion = modelName;
+            deleteButtonTrigger = buttonElement; // Store the button to toggle its spinner
+
+            // Update modal content
+            const modelNameToDeleteSpan = document.getElementById('modelNameToDelete');
+            if (modelNameToDeleteSpan) {
+                modelNameToDeleteSpan.textContent = modelName;
+            }
+
+            // Get or create the Bootstrap Modal instance
+            const modalElement = document.getElementById('deleteConfirmModal');
+            if (!modalElement) {
+                console.error("Delete confirmation modal element not found!");
+                showStatus("Error: Confirmation dialog is missing.", true);
+                return;
+            }
+
+            if (!deleteModalInstance) { // Initialize only once
+                deleteModalInstance = new bootstrap.Modal(modalElement);
+            }
+            deleteModalInstance.show(); // Show the modal
+        }
+
+        async function performActualDeletion() {
+            if (!modelPendingDeletion || !deleteButtonTrigger) {
+                console.error("performActualDeletion called without modelPendingDeletion or deleteButtonTrigger.");
+                return;
+            }
+
+            const modelName = modelPendingDeletion;
+            const buttonElement = deleteButtonTrigger;
+
+            // Close the modal first
+            if (deleteModalInstance) {
+                deleteModalInstance.hide();
+            }
+
+            toggleButtonSpinner(buttonElement, true); // Show spinner on the original "Delete Model" button
+
+            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+
             try {
                 const response = await fetch(`${apiUrl}/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
+                const responseText = await response.text();
                 if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+                    let errorMessage = responseText;
+                    try { const errorJson = JSON.parse(responseText); errorMessage = errorJson.detail || errorJson.title || errorJson.error || JSON.stringify(errorJson); } catch (e) { /* use raw text */ }
+                    throw new Error(`HTTP error! status: ${response.status} - ${errorMessage}`);
                 }
-                showStatus(`Successfully deleted configuration for model ${modelName}.`, false);
-                document.getElementById(`model-${modelName}`)?.remove();
-                if (configContainer.children.length === 0) {
+                showStatus(`Successfully deleted configuration for model <b>${modelName}</b>.`, false);
+                document.getElementById(`model-${sanitizedModelName}`)?.remove();
+
+                // Check if configContainer is available before accessing its children
+                if (configContainer && (configContainer.children.length === 0 || (configContainer.children.length === 1 && configContainer.firstElementChild.classList.contains('alert')))) {
                     configContainer.innerHTML = '<div class="alert alert-info">No models configured yet. Use the form below to add one.</div>';
                 }
             } catch (error) {
                 console.error(`Error deleting config for ${modelName}:`, error);
-                showStatus(`Error deleting config for ${modelName}: ${error.message || 'Unknown error'}`, true);
+                showStatus(`Error deleting config for <b>${modelName}</b>: ${error.message || 'Unknown error'}`, true);
+            } finally {
+                toggleButtonSpinner(buttonElement, false); // Hide spinner on original button
+                modelPendingDeletion = null; // Reset
+                deleteButtonTrigger = null;  // Reset
             }
         }
 
         function showStatus(message, isError = false) {
-            statusMessage.textContent = message;
-            statusMessage.className = `alert ${isError ? 'alert-danger' : 'alert-success'} mb-3`;
-            // Auto-clear can be added if desired
-            // setTimeout(() => { /* ... */ }, 5000);
+            if (!statusMessageContainer) { console.error("showStatus: statusMessageContainer not initialized."); return; }
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert ${isError ? 'alert-danger' : 'alert-success'} alert-dismissible fade show m-0 mb-2 shadow-sm`; // Added m-0 mb-2
+            alertDiv.setAttribute('role', 'alert');
+            alertDiv.innerHTML = `${message} <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>`;
+            statusMessageContainer.prepend(alertDiv);
+            setTimeout(() => {
+                const bsAlert = bootstrap.Alert.getInstance(alertDiv);
+                if (bsAlert) { bsAlert.close(); }
+                else if (alertDiv.parentElement) { alertDiv.remove(); }
+            }, 5000);
         }
 
         // --- Initial Load ---
-        document.addEventListener('DOMContentLoaded', loadConfig);
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize DOM-dependent constants here
+            configContainer = document.getElementById('config-container');
+            newModelNameInput = document.getElementById('new-model-name');
+            statusMessageContainer = document.getElementById('status-message-container');
+
+            // Attach event listener to the modal's confirm delete button
+            const confirmDeleteBtn = document.getElementById('confirmDeleteButton');
+            if (confirmDeleteBtn) {
+                confirmDeleteBtn.addEventListener('click', performActualDeletion);
+            } else {
+                console.error("Confirm delete button in modal not found!");
+            }
+
+            if (configContainer && newModelNameInput && statusMessageContainer) {
+                loadConfig();
+            } else {
+                console.error("One or more critical UI elements not found on DOMContentLoaded.");
+                // ... (error message to body)
+            }
+        });
     </script>
 
-    <!-- Link to Local Bootstrap JS Bundle (Popper included) -->
-    <script src="/lib/bootstrap/js/bootstrap.js"></script>
+    <!-- Link to Local Bootstrap JS Bundle (Popper included if it's bootstrap.bundle.js) -->
+    <script src="/lib/bootstrap/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

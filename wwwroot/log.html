@@ -1,0 +1,200 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Proxy Logs</title>
+    <link rel="icon" href="/icon.ico" type="image/x-icon">
+    <link href="/lib/bootstrap/css/bootstrap.css" rel="stylesheet">
+    <!-- DataTables CSS -->
+    <link href="/lib/datatables/css/datatables.min.css" rel="stylesheet">
+    <style>
+        .modal-body pre {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            max-height: 400px;
+            overflow-y: auto;
+            word-break: break-all;
+            white-space: pre-wrap;
+        }
+
+        td.dt-control {
+            cursor: pointer;
+        }
+
+        tr.dt-hasChild td.dt-control {
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4 mb-5">
+        <header class="pb-3 mb-4 border-bottom d-flex justify-content-between align-items-center">
+            <h1 class="h3">API Request Logs</h1>
+            <a href="/admin" class="btn btn-outline-secondary btn-sm">Back to Config</a>
+        </header>
+
+        <table id="logsTable" class="table table-striped table-bordered table-hover" style="width:100%">
+            <thead>
+                <tr>
+                    <th></th> <!-- For expand/collapse control -->
+                    <th>Timestamp</th>
+                    <th>Path</th>
+                    <th>Method</th>
+                    <th>Model</th>
+                    <th>Backend</th>
+                    <th>Backend Status</th>
+                    <th>Proxy Status</th>
+                    <th>Success</th>
+                    <th>Error (Brief)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Data will be populated by DataTables -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Log Detail Modal -->
+    <div class="modal fade" id="logDetailModal" tabindex="-1" aria-labelledby="logDetailModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="logDetailModalLabel">Log Entry Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="logDetailModalBody">
+                    <!-- Details will be loaded here -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/lib/jquery/js/jquery-3.7.1.min.js"></script>
+    <script src="/lib/bootstrap/js/bootstrap.bundle.min.js"></script>
+    <!-- DataTables JS -->
+    <script src="/lib/datatables/js/datatables.min.js"></script>
+
+    <script>
+        let logDetailModalInstance = null;
+
+        function formatJson(jsonString) {
+            if (!jsonString) return 'N/A';
+            try {
+                const jsonObj = JSON.parse(jsonString);
+                return JSON.stringify(jsonObj, null, 2);
+            } catch (e) {
+                return jsonString; // Return as is if not valid JSON
+            }
+        }
+
+        function showLogDetails(logId) {
+            fetch(`/admin/logs/${logId}`)
+                .then(response => response.json())
+                .then(data => {
+                    const modalBody = document.getElementById('logDetailModalBody');
+                    let html = `<h6 class="mb-3">Entry ID: ${data.id} - Timestamp: ${new Date(data.timestamp).toLocaleString()}</h6>`;
+
+                    html += '<nav><div class="nav nav-tabs mb-3" id="nav-tab" role="tablist">';
+                    html += '<button class="nav-link active" id="nav-client-req-tab" data-bs-toggle="tab" data-bs-target="#nav-client-req" type="button" role="tab">Client Req</button>';
+                    html += '<button class="nav-link" id="nav-upstream-tab" data-bs-toggle="tab" data-bs-target="#nav-upstream" type="button" role="tab">Upstream Detail</button>';
+                    html += '<button class="nav-link" id="nav-proxy-res-tab" data-bs-toggle="tab" data-bs-target="#nav-proxy-res" type="button" role="tab">Proxy Res</button>';
+                    html += '</div></nav>';
+
+                    html += '<div class="tab-content" id="nav-tabContent">';
+                    // Client Request Tab
+                    html += `<div class="tab-pane fade show active" id="nav-client-req" role="tabpanel">
+                                                                    <p><strong>Path:</strong> ${data.requestPath} (${data.requestMethod})</p>
+                                                                    <p><strong>Requested Model:</strong> ${data.requestedModel || 'N/A'}</p>
+                                                                    <p><strong>Client Request Body:</strong></p><pre><code>${formatJson(data.clientRequestBody)}</code></pre>
+                                                                 </div>`;
+                    // Upstream Detail Tab
+                    html += `<div class="tab-pane fade" id="nav-upstream" role="tabpanel">
+                                                                    <p><strong>Backend Name:</strong> ${data.upstreamBackendName || 'N/A'}</p>
+                                                                    <p><strong>Upstream URL:</strong> ${data.upstreamUrl || 'N/A'}</p>
+                                                                    <p><strong>Upstream Status Code:</strong> ${data.upstreamStatusCode || 'N/A'}</p>
+                                                                    <p><strong>Upstream Request Body:</strong></p><pre><code>${formatJson(data.upstreamRequestBody)}</code></pre>
+                                                                    <p><strong>Upstream Response Body:</strong></p><pre><code>${formatJson(data.upstreamResponseBody)}</code></pre>
+                                                                 </div>`;
+                    // Proxy Response Tab
+                    html += `<div class="tab-pane fade" id="nav-proxy-res" role="tabpanel">
+                                                                    <p><strong>Proxy Response Status Code:</strong> ${data.proxyResponseStatusCode}</p>
+                                                                    <p><strong>Overall Success:</strong> <span class="badge bg-${data.wasSuccess ? 'success' : 'danger'}">${data.wasSuccess}</span></p>
+                                                                    <p><strong>Error Message:</strong></p><pre><code>${data.errorMessage || 'N/A'}</code></pre>
+                                                                 </div>`;
+                    html += '</div>'; // end tab-content
+
+                    modalBody.innerHTML = html;
+                    if (!logDetailModalInstance) {
+                        logDetailModalInstance = new bootstrap.Modal(document.getElementById('logDetailModal'));
+                    }
+                    logDetailModalInstance.show();
+                })
+                .catch(error => {
+                    console.error('Error fetching log details:', error);
+                    alert('Could not load log details.');
+                });
+        }
+
+        $(document).ready(function () {
+            const table = $('#logsTable').DataTable({
+                processing: true,
+                serverSide: true, // Enable server-side processing
+                ajax: {
+                    url: '/admin/logs', // Your API endpoint for logs
+                    type: 'GET', // Should be GET for DataTables server-side
+                    data: function (d) { // d is DataTables default request object
+                        // d.draw, d.start, d.length, d.search.value are automatically sent
+                        // You can add custom parameters here if needed
+                        // For example, if you have date range filters
+                    },
+                    dataSrc: function (json) {
+                        // DataTables expects data in json.data
+                        // And total counts in json.recordsTotal and json.recordsFiltered
+                        //console.log(json.data);
+                        return json.data;
+                    }
+                },
+                columns: [
+                    {
+                        className: 'dt-control', // For expand/collapse - can be repurposed for "Details" button
+                        orderable: false,
+                        data: null,
+                        defaultContent: '', // Empty, will be a button or icon
+                        width: "15px"
+                    },
+                    { data: 'timestamp' },
+                    { data: 'requestPath' },
+                    { data: 'requestMethod' },
+                    { data: 'requestedModel' },
+                    { data: 'upstreamBackendName' },
+                    { data: 'upstreamStatusCode' },
+                    { data: 'proxyResponseStatusCode' },
+                    {
+                        data: 'wasSuccess',
+                        render: function (data, type, row) {
+                            return data ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-danger">No</span>';
+                        }
+                    },
+                    { data: 'briefError' }
+                ],
+                order: [[1, 'desc']], // Default order by timestamp descending
+                createdRow: function (row, data, dataIndex) {
+                    // Add click handler for the details control column
+                    $('td.dt-control', row).off('click').on('click', function () {
+                        showLogDetails(data.id);
+                    });
+                },
+                // --- SearchPanes Configuration ---
+                dom: 'Pfrtip', // 'P' adds SearchPanes. Default is 'lfrtip'.
+                // Or use a layout like: '<"dtsp-panesContainer"P><"row"<"col-md-6"l><"col-md-6"f>>rt<"row"<"col-md-5"i><"col-md-7"p>>'
+                // if you want to control placement
+                dom: 'Qftip',
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,11 +1,12 @@
 ﻿// Services/DispatcherService.cs
 using LLMProxy.Models;
-
+using LLMProxy.Data;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace LLMProxy.Services;
 
@@ -13,11 +14,12 @@ public class DispatcherService
 {
     #region Constructors
 
-    public DispatcherService(IHttpClientFactory httpClientFactory, RoutingService routingService, ILogger<DispatcherService> logger)
+    public DispatcherService(IHttpClientFactory httpClientFactory, RoutingService routingService, ILogger<DispatcherService> logger, IServiceScopeFactory scopeFactory)
     {
         _httpClientFactory = httpClientFactory;
         _routingService = routingService;
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
 
     #endregion Constructors
@@ -32,12 +34,32 @@ public class DispatcherService
 
     private readonly ILogger<DispatcherService> _logger;
 
+    private readonly IServiceScopeFactory _scopeFactory;
+
     #endregion Fields
 
     #region Methods
 
+    private async Task LogRequestAsync(ApiLogEntry logEntry)
+    {
+        // Use a new scope to get a DbContext instance, as DispatcherService might be Scoped
+        // and DbContext is typically Scoped or Transient.
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ProxyDbContext>();
+            dbContext.ApiLogEntries.Add(logEntry);
+            await dbContext.SaveChangesAsync();
+        }
+    }
+
     public async Task DispatchRequestAsync(HttpContext context)
     {
+        var logEntry = new ApiLogEntry
+        {
+            RequestPath = context.Request.Path.Value ?? string.Empty,
+            RequestMethod = context.Request.Method
+        };
+
         string requestPath = context.Request.Path.Value ?? string.Empty; // e.g., "/v1/chat/completions"
         string method = context.Request.Method;
 
@@ -61,30 +83,38 @@ public class DispatcherService
             _logger.LogError("Unsupported proxy request path: {RequestPath}", requestPath);
             context.Response.StatusCode = StatusCodes.Status404NotFound; // Use 404 for unsupported paths
             await context.Response.WriteAsJsonAsync(new ErrorResponse { Error = "Unsupported proxy endpoint path." });
+            await LogRequestAsync(logEntry);
             return;
         }
+
         _logger.LogDebug("Determined backend path suffix '{BackendPathSuffix}' for request path '{RequestPath}'", backendPathSuffix, requestPath);
         string originalRequestBody;
         using (var reader = new StreamReader(context.Request.Body, Encoding.UTF8))
         {
             originalRequestBody = await reader.ReadToEndAsync();
+            logEntry.ClientRequestBody = originalRequestBody;
         }
 
         // Extract the* general*model name requested by the client
         string? generalModelName = TryExtractModelName(originalRequestBody);
+        logEntry.RequestedModel = generalModelName;
 
         if (string.IsNullOrEmpty(generalModelName))
         {
             _logger.LogWarning("Could not extract model name from request body for path {Path}.", requestPath);
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
             await context.Response.WriteAsJsonAsync(new ErrorResponse { Error = "Could not determine model name from request." });
+            logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
+            logEntry.WasSuccess = false;
+            logEntry.ErrorMessage = "Could not determine model name from request.";
+            await LogRequestAsync(logEntry);
             return;
         }
 
         bool isStreaming = originalRequestBody.Contains("\"stream\": true");
 
         List<BackendConfig> triedBackends = new();
-        HttpResponseMessage? response = null;
+        HttpResponseMessage? backendResponse = null;
 
         while (true)
         {
@@ -97,10 +127,16 @@ public class DispatcherService
                 _logger.LogError("All backends failed or no backend/key available for model {ModelName}.", generalModelName);
                 context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 await context.Response.WriteAsJsonAsync(new ErrorResponse { Error = "All language model backends are temporarily unavailable." });
+                logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
+                logEntry.WasSuccess = false;
+                logEntry.ErrorMessage = "All configured backends failed or were unavailable.";
+                // No specific upstream info here as all attempts failed before a successful dispatch
+                await LogRequestAsync(logEntry);
                 return;
             }
 
             triedBackends.Add(selectedBackend);
+            logEntry.UpstreamBackendName = selectedBackend.Name; // Log which backend is being tried
 
             // Get the configured BaseUrl
             string configuredBaseUrl = selectedBackend.BaseUrl;
@@ -138,9 +174,11 @@ public class DispatcherService
                     selectedBackend.BaseUrl,
                     backendPathSuffix, // Correct variable here
                     selectedBackend.Name);
+                logEntry.ErrorMessage = $"URI Format Error: {ex.Message}";
                 continue; // Skip to the next backend
             }
-            // --- END FIX ---
+
+            logEntry.UpstreamUrl = upstreamUri.ToString();
 
             // --- Modify Request Body if BackendModelName is set (Keep this logic) ---
             string outgoingRequestBody = originalRequestBody; // Default to original
@@ -176,6 +214,8 @@ public class DispatcherService
                 }
             }
 
+            logEntry.UpstreamRequestBody = outgoingRequestBody; // Log body sent to backend
+
             var httpClient = _httpClientFactory.CreateClient(BackendClientName);
             using var upstreamRequest = new HttpRequestMessage(new HttpMethod(method), upstreamUri)
             {
@@ -193,31 +233,51 @@ public class DispatcherService
                     ? HttpCompletionOption.ResponseHeadersRead
                     : HttpCompletionOption.ResponseContentRead;
 
-                response = await httpClient.SendAsync(upstreamRequest, completionOption, context.RequestAborted);
+                backendResponse = await httpClient.SendAsync(upstreamRequest, completionOption, context.RequestAborted);
 
-                if (response.IsSuccessStatusCode)
+                logEntry.UpstreamStatusCode = (int)backendResponse.StatusCode; // Log backend status
+
+                // Log backend response body (careful with large responses in production)
+                // For streaming, this will be empty initially. For non-streaming, it's the full body.
+                // Consider truncating or only logging on error for performance.
+                if (!isStreaming || !backendResponse.IsSuccessStatusCode)
+                { // Log if not streaming success
+                    logEntry.UpstreamResponseBody = await backendResponse.Content.ReadAsStringAsync(context.RequestAborted);
+                }
+
+                if (backendResponse.IsSuccessStatusCode)
                 {
                     // ... (Relay successful response) ...
-                    _logger.LogInformation("Received successful response ({StatusCode}) from {Backend} for model '{ModelNameUsed}'", response.StatusCode, selectedBackend.Name, modelNameToLog);
-                    await RelayResponseAsync(context, response, isStreaming);
+                    _logger.LogInformation("Received successful response ({StatusCode}) from {Backend} for model '{ModelNameUsed}'", backendResponse.StatusCode, selectedBackend.Name, modelNameToLog);
+                    await RelayResponseAsync(context, backendResponse, isStreaming);
+                    logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
+                    logEntry.WasSuccess = true;
+                    await LogRequestAsync(logEntry);
                     return;
                 }
                 else // Non-success status code from backend
                 {
-                    _logger.LogWarning("Backend {Backend} returned non-success status code: {StatusCode} for model '{ModelNameUsed}'",
-                                           selectedBackend.Name, response.StatusCode, modelNameToLog);
+                    logEntry.ErrorMessage = $"Backend '{selectedBackend.Name}' Error: {backendResponse.StatusCode}. Body: {logEntry.UpstreamResponseBody?.Substring(0, Math.Min(logEntry.UpstreamResponseBody.Length, 500))}"; // Truncate
 
-                    if (IsRetryableError(response.StatusCode))
+                    _logger.LogWarning("Backend {Backend} returned non-success status code: {StatusCode} for model '{ModelNameUsed}'",
+                                           selectedBackend.Name, backendResponse.StatusCode, modelNameToLog);
+
+                    if (IsRetryableError(backendResponse.StatusCode))
                     {
-                        _logger.LogWarning("Retryable error ({StatusCode}) from {Backend}. Trying next backend...", response.StatusCode, selectedBackend.Name);
-                        response.Dispose(); // Dispose response before retrying
+                        _logger.LogWarning("Retryable error ({StatusCode}) from {Backend}. Trying next backend...", backendResponse.StatusCode, selectedBackend.Name);
+                        backendResponse.Dispose(); // Dispose response before retrying
+                        // Don't log the main entry yet, let the loop continue
                         continue; // Go to the next iteration of the while loop
                     }
                     else
                     {
                         // Non-retryable error from the backend, relay it to the client
-                        _logger.LogError("Non-retryable error ({StatusCode}) from {Backend}. Failing request.", response.StatusCode, selectedBackend.Name);
-                        await RelayResponseAsync(context, response, isStreaming); // Relay the error response
+                        _logger.LogError("Non-retryable error ({StatusCode}) from {Backend}. Failing request.", backendResponse.StatusCode, selectedBackend.Name);
+                        await RelayResponseAsync(context, backendResponse, isStreaming); // Relay the error response
+                        logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
+                        logEntry.WasSuccess = false;
+                        // ErrorMessage already set
+                        await LogRequestAsync(logEntry);
                         return;
                     }
                 }
@@ -225,7 +285,7 @@ public class DispatcherService
             catch (HttpRequestException ex)
             {
                 _logger.LogError(ex, "HTTP request exception when contacting {Backend} ({UpstreamUri}). Trying next backend...", selectedBackend.Name, upstreamUri);
-                response?.Dispose();
+                backendResponse?.Dispose();
                 continue;
             }
             catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException || context.RequestAborted.IsCancellationRequested)
@@ -233,21 +293,38 @@ public class DispatcherService
                 if (context.RequestAborted.IsCancellationRequested)
                 {
                     _logger.LogInformation("Client cancelled the request to {Path}", requestPath);
-                    response?.Dispose();
+                    backendResponse?.Dispose();
                     return; // EXIT: Client cancelled
                 }
                 else // Timeout
                 {
                     _logger.LogError(ex, "Timeout when contacting {Backend} ({UpstreamUri}). Trying next backend...", selectedBackend.Name, upstreamUri);
-                    response?.Dispose();
+                    backendResponse?.Dispose();
                     continue; // Try next backend on timeout
                 }
             }
             catch (Exception ex) // Catch broader exceptions
             {
                 _logger.LogError(ex, "Unexpected error dispatching request to {Backend} ({UpstreamUri}). Trying next backend...", selectedBackend.Name, upstreamUri);
-                response?.Dispose();
-                continue;
+                logEntry.UpstreamStatusCode = null; // No HTTP response received
+                logEntry.ErrorMessage = $"Dispatch Exception to '{selectedBackend.Name}': {ex.Message}";
+                logEntry.UpstreamResponseBody = null; // No response body
+
+                // Treat most dispatch exceptions as retryable for the *next backend*
+                backendResponse?.Dispose(); // Dispose if partially created
+                // Don't log the main entry yet, let the loop continue to try other backends
+                // However, if this was the *last* backend, the main "All backends failed" log will cover it.
+                // We could add a per-backend attempt log here if detailed trail is needed.
+                if (ex is TaskCanceledException && context.RequestAborted.IsCancellationRequested)
+                {
+                    _logger.LogInformation("Client cancelled request during dispatch to {Backend}", selectedBackend.Name);
+                    logEntry.ErrorMessage = "Client cancelled request.";
+                    logEntry.WasSuccess = false;
+                    logEntry.ProxyResponseStatusCode = StatusCodes.Status499ClientClosedRequest; // Or just don't log final response
+                    await LogRequestAsync(logEntry);
+                    return; // Exit if client cancelled
+                }
+                continue; // Try next backend
             }
         }
     }
