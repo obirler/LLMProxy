@@ -107,24 +107,24 @@
                     html += '<div class="tab-content" id="nav-tabContent">';
                     // Client Request Tab
                     html += `<div class="tab-pane fade show active" id="nav-client-req" role="tabpanel">
-                                                                    <p><strong>Path:</strong> ${data.requestPath} (${data.requestMethod})</p>
-                                                                    <p><strong>Requested Model:</strong> ${data.requestedModel || 'N/A'}</p>
-                                                                    <p><strong>Client Request Body:</strong></p><pre><code>${formatJson(data.clientRequestBody)}</code></pre>
-                                                                 </div>`;
+                                                                        <p><strong>Path:</strong> ${data.requestPath} (${data.requestMethod})</p>
+                                                                        <p><strong>Requested Model:</strong> ${data.requestedModel || 'N/A'}</p>
+                                                                        <p><strong>Client Request Body:</strong></p><pre><code>${formatJson(data.clientRequestBody)}</code></pre>
+                                                                     </div>`;
                     // Upstream Detail Tab
                     html += `<div class="tab-pane fade" id="nav-upstream" role="tabpanel">
-                                                                    <p><strong>Backend Name:</strong> ${data.upstreamBackendName || 'N/A'}</p>
-                                                                    <p><strong>Upstream URL:</strong> ${data.upstreamUrl || 'N/A'}</p>
-                                                                    <p><strong>Upstream Status Code:</strong> ${data.upstreamStatusCode || 'N/A'}</p>
-                                                                    <p><strong>Upstream Request Body:</strong></p><pre><code>${formatJson(data.upstreamRequestBody)}</code></pre>
-                                                                    <p><strong>Upstream Response Body:</strong></p><pre><code>${formatJson(data.upstreamResponseBody)}</code></pre>
-                                                                 </div>`;
+                                                                        <p><strong>Backend Name:</strong> ${data.upstreamBackendName || 'N/A'}</p>
+                                                                        <p><strong>Upstream URL:</strong> ${data.upstreamUrl || 'N/A'}</p>
+                                                                        <p><strong>Upstream Status Code:</strong> ${data.upstreamStatusCode || 'N/A'}</p>
+                                                                        <p><strong>Upstream Request Body:</strong></p><pre><code>${formatJson(data.upstreamRequestBody)}</code></pre>
+                                                                        <p><strong>Upstream Response Body:</strong></p><pre><code>${formatJson(data.upstreamResponseBody)}</code></pre>
+                                                                     </div>`;
                     // Proxy Response Tab
                     html += `<div class="tab-pane fade" id="nav-proxy-res" role="tabpanel">
-                                                                    <p><strong>Proxy Response Status Code:</strong> ${data.proxyResponseStatusCode}</p>
-                                                                    <p><strong>Overall Success:</strong> <span class="badge bg-${data.wasSuccess ? 'success' : 'danger'}">${data.wasSuccess}</span></p>
-                                                                    <p><strong>Error Message:</strong></p><pre><code>${data.errorMessage || 'N/A'}</code></pre>
-                                                                 </div>`;
+                                                                        <p><strong>Proxy Response Status Code:</strong> ${data.proxyResponseStatusCode}</p>
+                                                                        <p><strong>Overall Success:</strong> <span class="badge bg-${data.wasSuccess ? 'success' : 'danger'}">${data.wasSuccess}</span></p>
+                                                                        <p><strong>Error Message:</strong></p><pre><code>${data.errorMessage || 'N/A'}</code></pre>
+                                                                     </div>`;
                     html += '</div>'; // end tab-content
 
                     modalBody.innerHTML = html;
@@ -189,10 +189,8 @@
                     });
                 },
                 // --- SearchPanes Configuration ---
-                dom: 'Pfrtip', // 'P' adds SearchPanes. Default is 'lfrtip'.
+                dom: 'Qlfrtip', // 'P' adds SearchPanes. Default is 'lfrtip'.
                 // Or use a layout like: '<"dtsp-panesContainer"P><"row"<"col-md-6"l><"col-md-6"f>>rt<"row"<"col-md-5"i><"col-md-7"p>>'
-                // if you want to control placement
-                dom: 'Qftip',
             });
         });
     </script>

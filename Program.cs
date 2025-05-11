@@ -8,6 +8,7 @@ using LLMProxy.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc; // Required for FromBody attribute and Results class
 using Microsoft.AspNetCore.Http;
+using System.Text.RegularExpressions;
 
 // --- 1. Application Builder Setup ---
 var builder = WebApplication.CreateBuilder(args);
@@ -242,20 +243,24 @@ app.MapGet("/admin", (HttpContext context) =>
 var proxyApiGroup = app.MapGroup("/v1")
                        .WithTags("LLM Proxy API");
 
-// GET /v1/models - List models configured in the proxy
+// --- Modify LLM Proxy Endpoints ---
+// GET /v1/models - List models configured in the proxy (now includes model groups)
 proxyApiGroup.MapGet("/models", (DynamicConfigurationService configService) =>
 {
-    Debug.WriteLine("Getting /models");
+    Debug.WriteLine("Getting /v1/models (including groups)");
     var currentConfig = configService.GetCurrentConfig();
-    var modelList = currentConfig.Models.Keys
-        .OrderBy(name => name)
-        .Select(modelName => new ModelInfo { Id = modelName }) // Assumes ModelInfo sets defaults for Object and OwnedBy
+
+    var modelIds = currentConfig.Models.Keys.Select(id => new ModelInfo { Id = id });
+    var groupIds = currentConfig.ModelGroups.Keys.Select(id => new ModelInfo { Id = id }); // Groups are also presented as "models"
+
+    var allProxyModels = modelIds.Concat(groupIds)
+        .OrderBy(m => m.Id)
         .ToList();
 
-    var response = new ModelListResponse { Data = modelList };
+    var response = new ModelListResponse { Data = allProxyModels };
     return Results.Ok(response);
 })
-.WithName("GetModels");
+.WithName("GetModels"); // Name remains the same, but behavior is updated.
 
 // Generic handler for POST proxy requests (Chat, Completions, Embeddings)
 var proxyPostHandler = async (HttpContext context, DispatcherService dispatcher, ILogger<Program> logger) =>
@@ -325,6 +330,104 @@ logApiGroup.MapGet("/{id:long}", async (long id, ProxyDbContext dbContext) =>
     var logEntry = await dbContext.ApiLogEntries.FindAsync(id);
     return logEntry == null ? Results.NotFound() : Results.Ok(logEntry); // Return full entry for detail view
 });
+
+// --- Admin Configuration API Endpoints for Model Groups ---
+var adminGroupApiGroup = app.MapGroup("/admin/config/groups")
+                           .WithTags("Admin Model Group API");
+
+// GET /admin/config/groups - Retrieve all model group configurations
+adminGroupApiGroup.MapGet("/", (DynamicConfigurationService configService) =>
+{
+    var config = configService.GetCurrentConfig();
+    return Results.Ok(config.ModelGroups ?? new Dictionary<string, ModelGroupConfig>());
+})
+.WithName("GetAllModelGroupConfigs");
+
+// GET /admin/config/groups/{groupName} - Retrieve a specific model group configuration
+adminGroupApiGroup.MapGet("/{groupName}", (string groupName, DynamicConfigurationService configService) =>
+{
+    var decodedGroupName = System.Net.WebUtility.UrlDecode(groupName);
+    if (configService.TryGetModelGroupRouting(decodedGroupName, out var groupConfig) && groupConfig != null)
+    {
+        return Results.Ok(groupConfig);
+    }
+    return Results.NotFound(new
+    {
+        Message = $"Model group '{decodedGroupName}' not found."
+    });
+})
+.WithName("GetModelGroupConfig");
+
+// POST /admin/config/groups/{groupName} - Add or update a model group's configuration
+adminGroupApiGroup.MapPost("/{groupName}", (string groupName, [FromBody] ModelGroupConfig groupConfig, DynamicConfigurationService configService, ILogger<Program> logger) =>
+{
+    var decodedGroupName = System.Net.WebUtility.UrlDecode(groupName);
+    logger.LogInformation("Received request to update config for model group: {GroupName}", decodedGroupName);
+
+    if (string.IsNullOrWhiteSpace(decodedGroupName) || groupConfig == null)
+    {
+        logger.LogWarning("Update model group config request failed: Invalid group name or missing body.");
+        return Results.BadRequest("Group name and configuration body are required.");
+    }
+
+    // Validate that member models in the group exist in the main Models configuration
+    var currentModels = configService.GetCurrentConfig().Models;
+    var invalidMembers = groupConfig.Models.Where(m => !currentModels.ContainsKey(m)).ToList();
+    if (invalidMembers.Any())
+    {
+        logger.LogWarning("Update model group '{GroupName}' failed: Contains member models not defined in main configuration: {InvalidModels}", decodedGroupName, string.Join(", ", invalidMembers));
+        return Results.BadRequest($"The following member models are not defined: {string.Join(", ", invalidMembers)}. Please define them as regular models first.");
+    }
+    // Validate ContentRules' TargetModelName and DefaultModelForContentBased
+    if (groupConfig.Strategy == RoutingStrategyType.ContentBased)
+    {
+        foreach (var rule in groupConfig.ContentRules)
+        {
+            if (!groupConfig.Models.Contains(rule.TargetModelName))
+            {
+                return Results.BadRequest($"Content rule targets model '{rule.TargetModelName}' which is not a member of group '{decodedGroupName}'.");
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(groupConfig.DefaultModelForContentBased) && !groupConfig.Models.Contains(groupConfig.DefaultModelForContentBased))
+        {
+            return Results.BadRequest($"DefaultModelForContentBased '{groupConfig.DefaultModelForContentBased}' is not a member of group '{decodedGroupName}'.");
+        }
+    }
+
+    bool success = configService.UpdateModelGroupConfiguration(decodedGroupName, groupConfig);
+    return success
+        ? Results.Ok(new
+        {
+            Message = $"Configuration for model group '{decodedGroupName}' updated."
+        })
+        : Results.StatusCode(StatusCodes.Status500InternalServerError);
+})
+.WithName("UpdateModelGroupConfig");
+
+// DELETE /admin/config/groups/{groupName} - Delete a model group's configuration
+adminGroupApiGroup.MapDelete("/{groupName}", (string groupName, DynamicConfigurationService configService, ILogger<Program> logger) =>
+{
+    var decodedGroupName = System.Net.WebUtility.UrlDecode(groupName);
+    logger.LogInformation("Received request to delete config for model group: {GroupName}", decodedGroupName);
+
+    if (string.IsNullOrWhiteSpace(decodedGroupName))
+    {
+        logger.LogWarning("Delete model group config request failed: Invalid group name.");
+        return Results.BadRequest("Group name is required.");
+    }
+
+    bool success = configService.DeleteModelGroupConfiguration(decodedGroupName);
+    return success
+        ? Results.Ok(new
+        {
+            Message = $"Configuration for model group '{decodedGroupName}' deleted."
+        })
+        : Results.NotFound(new
+        {
+            Message = $"Model group '{decodedGroupName}' not found."
+        });
+})
+.WithName("DeleteModelGroupConfig");
 
 // --- 8. Run the Application ---
 app.Run(); // Starts listening for incoming HTTP requests

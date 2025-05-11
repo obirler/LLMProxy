@@ -7,12 +7,17 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Http; // Required for EnableBuffering
 
 namespace LLMProxy.Services;
 
 public class DispatcherService
 {
-    #region Constructors
+    private const string BackendClientName = "LLMBackendClient";
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly RoutingService _routingService;
+    private readonly ILogger<DispatcherService> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public DispatcherService(IHttpClientFactory httpClientFactory, RoutingService routingService, ILogger<DispatcherService> logger, IServiceScopeFactory scopeFactory)
     {
@@ -22,314 +27,359 @@ public class DispatcherService
         _scopeFactory = scopeFactory;
     }
 
-    #endregion Constructors
-
-    #region Fields
-
-    private const string BackendClientName = "LLMBackendClient";
-
-    private readonly IHttpClientFactory _httpClientFactory;
-
-    private readonly RoutingService _routingService;
-
-    private readonly ILogger<DispatcherService> _logger;
-
-    private readonly IServiceScopeFactory _scopeFactory;
-
-    #endregion Fields
-
-    #region Methods
-
     private async Task LogRequestAsync(ApiLogEntry logEntry)
     {
-        // Use a new scope to get a DbContext instance, as DispatcherService might be Scoped
-        // and DbContext is typically Scoped or Transient.
-        using (var scope = _scopeFactory.CreateScope())
-        {
-            var dbContext = scope.ServiceProvider.GetRequiredService<ProxyDbContext>();
-            dbContext.ApiLogEntries.Add(logEntry);
-            await dbContext.SaveChangesAsync();
-        }
+        using var scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ProxyDbContext>();
+        dbContext.ApiLogEntries.Add(logEntry);
+        await dbContext.SaveChangesAsync();
     }
 
     public async Task DispatchRequestAsync(HttpContext context)
     {
+        var clientRequestPath = context.Request.Path.Value ?? string.Empty;
+        var clientRequestMethod = context.Request.Method;
+
+        context.Request.EnableBuffering();
+
         var logEntry = new ApiLogEntry
         {
-            RequestPath = context.Request.Path.Value ?? string.Empty,
-            RequestMethod = context.Request.Method
+            RequestPath = clientRequestPath,
+            RequestMethod = clientRequestMethod,
+            Timestamp = DateTime.UtcNow
         };
 
-        string requestPath = context.Request.Path.Value ?? string.Empty; // e.g., "/v1/chat/completions"
-        string method = context.Request.Method;
-
-        // Get the last part of the incoming path (e.g., "chat/completions", "embeddings")
-        string? backendPathSuffix;
-        // Use EndsWith for robustness against potential leading slashes or variations
-        if (requestPath.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+        string? backendPathSuffix = GetBackendPathSuffix(clientRequestPath);
+        if (backendPathSuffix == null)
         {
-            backendPathSuffix = "chat/completions";
-        }
-        else if (requestPath.EndsWith("/completions", StringComparison.OrdinalIgnoreCase))
-        {
-            backendPathSuffix = "completions";
-        }
-        else if (requestPath.EndsWith("/embeddings", StringComparison.OrdinalIgnoreCase))
-        {
-            backendPathSuffix = "embeddings";
-        }
-        else
-        {
-            _logger.LogError("Unsupported proxy request path: {RequestPath}", requestPath);
-            context.Response.StatusCode = StatusCodes.Status404NotFound; // Use 404 for unsupported paths
+            _logger.LogError("Unsupported proxy request path: {RequestPath}", clientRequestPath);
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
             await context.Response.WriteAsJsonAsync(new ErrorResponse { Error = "Unsupported proxy endpoint path." });
-            await LogRequestAsync(logEntry);
-            return;
-        }
-
-        _logger.LogDebug("Determined backend path suffix '{BackendPathSuffix}' for request path '{RequestPath}'", backendPathSuffix, requestPath);
-        string originalRequestBody;
-        using (var reader = new StreamReader(context.Request.Body, Encoding.UTF8))
-        {
-            originalRequestBody = await reader.ReadToEndAsync();
-            logEntry.ClientRequestBody = originalRequestBody;
-        }
-
-        // Extract the* general*model name requested by the client
-        string? generalModelName = TryExtractModelName(originalRequestBody);
-        logEntry.RequestedModel = generalModelName;
-
-        if (string.IsNullOrEmpty(generalModelName))
-        {
-            _logger.LogWarning("Could not extract model name from request body for path {Path}.", requestPath);
-            context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await context.Response.WriteAsJsonAsync(new ErrorResponse { Error = "Could not determine model name from request." });
             logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
             logEntry.WasSuccess = false;
-            logEntry.ErrorMessage = "Could not determine model name from request.";
+            logEntry.ErrorMessage = "Unsupported proxy endpoint path.";
             await LogRequestAsync(logEntry);
             return;
         }
+
+        string originalRequestBody;
+        // It's good practice to ensure the stream is at the beginning before reading
+        context.Request.Body.Seek(0, SeekOrigin.Begin); // Or context.Request.Body.Position = 0; THIS NOW WORKS
+        using (var reader = new StreamReader(context.Request.Body, Encoding.UTF8, leaveOpen: true)) // leaveOpen for potential re-reads if needed, though we read once
+        {
+            originalRequestBody = await reader.ReadToEndAsync();
+        }
+        // Reset stream position again if anything else in *your* code might need to re-read it from the start.
+        // If only ASP.NET Core framework might re-read it (e.g. for model binding if you were using controllers with [FromBody]),
+        // it often handles this itself after EnableBuffering. But being explicit is safer.
+        context.Request.Body.Seek(0, SeekOrigin.Begin); // Or context.Request.Body.Position = 0;
+
+        logEntry.ClientRequestBody = originalRequestBody;
+
+        string? requestedModelOrGroupName = TryExtractModelName(originalRequestBody, "model");
+        logEntry.RequestedModel = requestedModelOrGroupName;
+
+        if (string.IsNullOrEmpty(requestedModelOrGroupName))
+        {
+            HandleBadRequest("Could not determine model name from request.", context, logEntry);
+            return;
+        }
+
+        _logger.LogInformation("Initial request for model/group: '{RequestedModelOrGroupName}' on path '{Path}'",
+            requestedModelOrGroupName, clientRequestPath);
 
         bool isStreaming = originalRequestBody.Contains("\"stream\": true");
 
-        List<BackendConfig> triedBackends = new();
+        List<string> triedMemberModelsInGroup = new(); // Tracks member models tried if requestedModelOrGroupName is a group
         HttpResponseMessage? backendResponse = null;
 
+        // Outer loop: Retrying different effective models (if requestedModelOrGroupName is a group)
         while (true)
         {
-            // Get the next backend based on the strategy
-            var (selectedBackend, apiKey) = _routingService.GetNextBackendAndKey(generalModelName, triedBackends);
+            var (effectiveModelName, modelConfig) = _routingService.ResolveEffectiveModelConfig(
+                requestedModelOrGroupName,
+                originalRequestBody,
+                triedMemberModelsInGroup
+            );
 
-            // *** THIS IS THE CRITICAL CHECK FOR EXHAUSTING BACKENDS ***
-            if (selectedBackend == null || string.IsNullOrEmpty(apiKey))
+            if (string.IsNullOrEmpty(effectiveModelName) || modelConfig == null)
             {
-                _logger.LogError("All backends failed or no backend/key available for model {ModelName}.", generalModelName);
-                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await context.Response.WriteAsJsonAsync(new ErrorResponse { Error = "All language model backends are temporarily unavailable." });
-                logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
-                logEntry.WasSuccess = false;
-                logEntry.ErrorMessage = "All configured backends failed or were unavailable.";
-                // No specific upstream info here as all attempts failed before a successful dispatch
+                _logger.LogError("Failed to resolve an effective model for '{RequestedInitial}' after trying {TriedCount} members (if group). All options exhausted.",
+                    requestedModelOrGroupName, triedMemberModelsInGroup.Count);
+                SetFinalFailureResponse(context, logEntry, "All language model backends or group members are temporarily unavailable or misconfigured.");
                 await LogRequestAsync(logEntry);
                 return;
             }
 
-            triedBackends.Add(selectedBackend);
-            logEntry.UpstreamBackendName = selectedBackend.Name; // Log which backend is being tried
+            logEntry.EffectiveModelName = effectiveModelName; // Log the model actually being used for this attempt
+            _logger.LogInformation("Attempting dispatch with effective model: '{EffectiveModelName}'", effectiveModelName);
 
-            // Get the configured BaseUrl
-            string configuredBaseUrl = selectedBackend.BaseUrl;
-            if (string.IsNullOrEmpty(configuredBaseUrl))
+            List<BackendConfig> triedBackendsForEffectiveModel = new();
+
+            // Inner loop: Retrying different backends for the current effectiveModelName
+            while (true)
             {
-                _logger.LogError("BaseUrl is empty or null for backend {BackendName}. Skipping.", selectedBackend.Name);
-                continue;
-            }
+                var (selectedBackend, apiKey) = _routingService.GetNextBackendAndKeyForModel(
+                    modelConfig,
+                    effectiveModelName, // Pass effective model name for logging/state within RoutingService
+                    triedBackendsForEffectiveModel
+                );
 
-            // Ensure the BaseUrl has a trailing slash for correct relative path combination
-            string baseUriStringForCombination = configuredBaseUrl;
-            if (!baseUriStringForCombination.EndsWith('/'))
-            {
-                baseUriStringForCombination += "/";
-            }
+                if (selectedBackend == null || string.IsNullOrEmpty(apiKey))
+                {
+                    _logger.LogWarning("All backends exhausted or no backend/key available for effective model '{EffectiveModelName}'.", effectiveModelName);
+                    // This effective model has failed. Add to triedMemberModelsInGroup and break inner loop to try next member model (if group).
+                    triedMemberModelsInGroup.Add(effectiveModelName);
+                    break; // Breaks inner loop, outer loop will call ResolveEffectiveModelConfig again
+                }
 
-            // Try creating the base Uri object from the adjusted string
-            if (!Uri.TryCreate(baseUriStringForCombination, UriKind.Absolute, out var baseUri))
-            {
-                _logger.LogError("Invalid BaseUrl format in configuration for backend {BackendName}: {AdjustedBaseUrl}. Skipping this backend.", selectedBackend.Name, selectedBackend.BaseUrl);
-                continue; // Skip to the next backend
-            }
+                triedBackendsForEffectiveModel.Add(selectedBackend);
+                logEntry.UpstreamBackendName = selectedBackend.Name;
 
-            // 2. Use the Uri constructor that correctly combines the base Uri and the *final segment*
-            Uri upstreamUri;
-            try
-            {
-                // Combine the configured BaseUrl (e.g., ".../v1beta/openai") with the correct suffix ("chat/completions")
-                upstreamUri = new Uri(baseUri, backendPathSuffix);
-            }
-            catch (UriFormatException ex)
-            {
-                // Use backendPathSuffix in the log message
-                _logger.LogError(ex, "Could not create upstream URI from BaseUrl '{BaseUrl}' and backend path suffix '{BackendPathSuffix}'. Skipping backend {BackendName}.",
-                    selectedBackend.BaseUrl,
-                    backendPathSuffix, // Correct variable here
-                    selectedBackend.Name);
-                logEntry.ErrorMessage = $"URI Format Error: {ex.Message}";
-                continue; // Skip to the next backend
-            }
+                // --- URI Construction ---
+                if (!TryConstructUpstreamUri(selectedBackend.BaseUrl, backendPathSuffix, out Uri? upstreamUri, out string uriError))
+                {
+                    _logger.LogError("Skipping backend '{BackendName}' for model '{EffectiveModel}' due to URI error: {Error}", selectedBackend.Name, effectiveModelName, uriError);
+                    logEntry.ErrorMessage = $"URI Error for backend {selectedBackend.Name}: {uriError}"; // Log per-attempt error
+                    // Continue inner loop for next backend of this effectiveModelName
+                    continue;
+                }
+                logEntry.UpstreamUrl = upstreamUri!.ToString();
 
-            logEntry.UpstreamUrl = upstreamUri.ToString();
+                // --- Modify Request Body for Backend-Specific Model Name ---
+                string outgoingRequestBody = originalRequestBody;
+                string modelNameToLogForBackend = effectiveModelName; // Default to effective model name for logging this attempt
 
-            // --- Modify Request Body if BackendModelName is set (Keep this logic) ---
-            string outgoingRequestBody = originalRequestBody; // Default to original
-            string modelNameToLog = generalModelName; // Model name used in logs
+                if (!string.IsNullOrWhiteSpace(selectedBackend.BackendModelName))
+                {
+                    _logger.LogInformation("Backend '{BackendName}' specifies overriding model name to '{BackendSpecificModel}' for effective model '{EffectiveModel}'.",
+                       selectedBackend.Name, selectedBackend.BackendModelName, effectiveModelName);
+                    modelNameToLogForBackend = selectedBackend.BackendModelName;
+                    if (!TryModifyRequestBodyModel(originalRequestBody, selectedBackend.BackendModelName, out outgoingRequestBody))
+                    {
+                        _logger.LogWarning("Failed to modify request body for backend-specific model name for backend {BackendName}. Sending original body for field 'model'.", selectedBackend.Name);
+                        // outgoingRequestBody is already originalRequestBody if modification fails
+                    }
+                }
+                logEntry.UpstreamRequestBody = outgoingRequestBody;
 
-            if (!string.IsNullOrWhiteSpace(selectedBackend.BackendModelName))
-            {
-                // ... (logic to parse JSON, update model, serialize back) ...
-                // (Keep the existing code block for this)
-                _logger.LogInformation("Backend '{BackendName}' specifies overriding model name to '{BackendModelName}' for original request model '{GeneralModelName}'.",
-                   selectedBackend.Name, selectedBackend.BackendModelName, generalModelName);
-                modelNameToLog = selectedBackend.BackendModelName;
+                // --- HTTP Dispatch ---
+                var httpClient = _httpClientFactory.CreateClient(BackendClientName);
+                using var upstreamRequest = new HttpRequestMessage(new HttpMethod(clientRequestMethod), upstreamUri)
+                {
+                    Content = new StringContent(outgoingRequestBody, Encoding.UTF8, "application/json")
+                };
+                upstreamRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                // Copy other relevant headers from context.Request.Headers if needed
+
+                _logger.LogInformation("Dispatching to {Backend} ({UpstreamUri}) for effective model '{EffectiveModel}' (using model ID '{ModelForBackend}' for backend).",
+                    selectedBackend.Name, upstreamUri, effectiveModelName, modelNameToLogForBackend);
 
                 try
                 {
-                    // Parse the original JSON body
-                    var jsonNode = JsonNode.Parse(originalRequestBody);
-                    if (jsonNode is JsonObject jsonObject && jsonObject.ContainsKey("model"))
+                    HttpCompletionOption completionOption = isStreaming ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead;
+                    backendResponse = await httpClient.SendAsync(upstreamRequest, completionOption, context.RequestAborted);
+                    logEntry.UpstreamStatusCode = (int)backendResponse.StatusCode;
+
+                    if (!isStreaming || !backendResponse.IsSuccessStatusCode)
                     {
-                        jsonObject["model"] = selectedBackend.BackendModelName;
-                        outgoingRequestBody = jsonObject.ToJsonString();
-                        _logger.LogDebug("Modified request body for backend {BackendName}: {RequestBody}", selectedBackend.Name, outgoingRequestBody);
+                        logEntry.UpstreamResponseBody = await backendResponse.Content.ReadAsStringAsync(context.RequestAborted);
+                        // Truncate for log if too long
+                        if (logEntry.UpstreamResponseBody != null && logEntry.UpstreamResponseBody.Length > 1000)
+                        {
+                            logEntry.UpstreamResponseBody = logEntry.UpstreamResponseBody.Substring(0, 1000) + "... (truncated)";
+                        }
                     }
-                    else
+
+                    if (backendResponse.IsSuccessStatusCode)
                     {
-                        _logger.LogWarning("Could not find 'model' property in request body JSON when trying to apply backend-specific model name for backend {BackendName}. Sending original body.", selectedBackend.Name);
-                    }
-                }
-                catch (JsonException jsonEx)
-                {
-                    _logger.LogError(jsonEx, "Failed to parse or modify request body JSON for backend-specific model name override for backend {BackendName}. Sending original body.", selectedBackend.Name);
-                    // Fallback to originalRequestBody which is already set
-                }
-            }
-
-            logEntry.UpstreamRequestBody = outgoingRequestBody; // Log body sent to backend
-
-            var httpClient = _httpClientFactory.CreateClient(BackendClientName);
-            using var upstreamRequest = new HttpRequestMessage(new HttpMethod(method), upstreamUri)
-            {
-                Content = new StringContent(outgoingRequestBody, Encoding.UTF8, "application/json")
-            };
-            upstreamRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-
-            // Copy other relevant headers if needed
-
-            _logger.LogInformation("Dispatching request for model '{ModelNameUsed}' to {Backend} ({UpstreamUri})", modelNameToLog, selectedBackend.Name, upstreamUri);
-            try
-            {
-                // --- Request Sending and Response Handling (Keep as is) ---
-                HttpCompletionOption completionOption = isStreaming
-                    ? HttpCompletionOption.ResponseHeadersRead
-                    : HttpCompletionOption.ResponseContentRead;
-
-                backendResponse = await httpClient.SendAsync(upstreamRequest, completionOption, context.RequestAborted);
-
-                logEntry.UpstreamStatusCode = (int)backendResponse.StatusCode; // Log backend status
-
-                // Log backend response body (careful with large responses in production)
-                // For streaming, this will be empty initially. For non-streaming, it's the full body.
-                // Consider truncating or only logging on error for performance.
-                if (!isStreaming || !backendResponse.IsSuccessStatusCode)
-                { // Log if not streaming success
-                    logEntry.UpstreamResponseBody = await backendResponse.Content.ReadAsStringAsync(context.RequestAborted);
-                }
-
-                if (backendResponse.IsSuccessStatusCode)
-                {
-                    // ... (Relay successful response) ...
-                    _logger.LogInformation("Received successful response ({StatusCode}) from {Backend} for model '{ModelNameUsed}'", backendResponse.StatusCode, selectedBackend.Name, modelNameToLog);
-                    await RelayResponseAsync(context, backendResponse, isStreaming);
-                    logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
-                    logEntry.WasSuccess = true;
-                    await LogRequestAsync(logEntry);
-                    return;
-                }
-                else // Non-success status code from backend
-                {
-                    logEntry.ErrorMessage = $"Backend '{selectedBackend.Name}' Error: {backendResponse.StatusCode}. Body: {logEntry.UpstreamResponseBody?.Substring(0, Math.Min(logEntry.UpstreamResponseBody.Length, 500))}"; // Truncate
-
-                    _logger.LogWarning("Backend {Backend} returned non-success status code: {StatusCode} for model '{ModelNameUsed}'",
-                                           selectedBackend.Name, backendResponse.StatusCode, modelNameToLog);
-
-                    if (IsRetryableError(backendResponse.StatusCode))
-                    {
-                        _logger.LogWarning("Retryable error ({StatusCode}) from {Backend}. Trying next backend...", backendResponse.StatusCode, selectedBackend.Name);
-                        backendResponse.Dispose(); // Dispose response before retrying
-                        // Don't log the main entry yet, let the loop continue
-                        continue; // Go to the next iteration of the while loop
-                    }
-                    else
-                    {
-                        // Non-retryable error from the backend, relay it to the client
-                        _logger.LogError("Non-retryable error ({StatusCode}) from {Backend}. Failing request.", backendResponse.StatusCode, selectedBackend.Name);
-                        await RelayResponseAsync(context, backendResponse, isStreaming); // Relay the error response
+                        _logger.LogInformation("Successful response ({StatusCode}) from {Backend} for effective model '{EffectiveModel}'.",
+                            backendResponse.StatusCode, selectedBackend.Name, effectiveModelName);
+                        await RelayResponseAsync(context, backendResponse, isStreaming);
                         logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
-                        logEntry.WasSuccess = false;
-                        // ErrorMessage already set
+                        logEntry.WasSuccess = true;
                         await LogRequestAsync(logEntry);
+                        return; // Successful completion of the entire request
+                    }
+                    else // Non-success status code from backend
+                    {
+                        logEntry.ErrorMessage = $"Backend '{selectedBackend.Name}' Error: {backendResponse.StatusCode}. Body: {logEntry.UpstreamResponseBody ?? "N/A"}";
+                        _logger.LogWarning("Backend {Backend} returned {StatusCode} for effective model '{EffectiveModel}'.",
+                            selectedBackend.Name, backendResponse.StatusCode, effectiveModelName);
+
+                        if (IsRetryableError(backendResponse.StatusCode))
+                        {
+                            _logger.LogInformation("Retryable error from {Backend}. Trying next backend for '{EffectiveModel}'.", selectedBackend.Name, effectiveModelName);
+                            backendResponse.Dispose(); // Dispose before retrying with next backend
+                            // Continue inner loop for next backend
+                            continue;
+                        }
+                        else // Non-retryable error from this backend
+                        {
+                            _logger.LogError("Non-retryable error ({StatusCode}) from {Backend} for '{EffectiveModel}'. Relaying error to client.",
+                                backendResponse.StatusCode, selectedBackend.Name, effectiveModelName);
+                            await RelayResponseAsync(context, backendResponse, isStreaming); // Relay the specific error
+                            logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
+                            logEntry.WasSuccess = false;
+                            // ErrorMessage already set for this attempt
+                            await LogRequestAsync(logEntry);
+                            return; // Fail the entire request with this backend's non-retryable error
+                        }
+                    }
+                }
+                catch (HttpRequestException ex)
+                {
+                    _logger.LogError(ex, "HTTP request exception for {Backend} ({UpstreamUri}) for model '{EffectiveModel}'. Trying next backend.", selectedBackend.Name, upstreamUri, effectiveModelName);
+                    logEntry.ErrorMessage = $"HTTP Exception for backend {selectedBackend.Name}: {ex.Message}";
+                    backendResponse?.Dispose();
+                    // Continue inner loop for next backend
+                    continue;
+                }
+                catch (TaskCanceledException ex) // Handles timeouts and client cancellations
+                {
+                    if (context.RequestAborted.IsCancellationRequested)
+                    {
+                        _logger.LogInformation("Client cancelled request to {Path} while waiting for {Backend}.", clientRequestPath, selectedBackend.Name);
+                        logEntry.ErrorMessage = "Client cancelled request.";
+                        logEntry.WasSuccess = false;
+                        logEntry.ProxyResponseStatusCode = 499; // Client Closed Request
+                        await LogRequestAsync(logEntry); // Log attempt
+                        backendResponse?.Dispose();
                         return;
                     }
+                    else // Timeout
+                    {
+                        _logger.LogError(ex, "Timeout contacting {Backend} ({UpstreamUri}) for model '{EffectiveModel}'. Trying next backend.", selectedBackend.Name, upstreamUri, effectiveModelName);
+                        logEntry.ErrorMessage = $"Timeout for backend {selectedBackend.Name}";
+                        backendResponse?.Dispose();
+                        // Continue inner loop for next backend
+                        continue;
+                    }
                 }
-            }
-            catch (HttpRequestException ex)
-            {
-                _logger.LogError(ex, "HTTP request exception when contacting {Backend} ({UpstreamUri}). Trying next backend...", selectedBackend.Name, upstreamUri);
-                backendResponse?.Dispose();
-                continue;
-            }
-            catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException || context.RequestAborted.IsCancellationRequested)
-            {
-                if (context.RequestAborted.IsCancellationRequested)
+                catch (Exception ex)
                 {
-                    _logger.LogInformation("Client cancelled the request to {Path}", requestPath);
+                    _logger.LogError(ex, "Unexpected error dispatching to {Backend} ({UpstreamUri}) for model '{EffectiveModel}'. Trying next backend.", selectedBackend.Name, upstreamUri, effectiveModelName);
+                    logEntry.UpstreamStatusCode = null;
+                    logEntry.ErrorMessage = $"Dispatch Exception for backend {selectedBackend.Name}: {ex.Message}";
+                    logEntry.UpstreamResponseBody = null;
                     backendResponse?.Dispose();
-                    return; // EXIT: Client cancelled
+                    // Continue inner loop for next backend
+                    continue;
                 }
-                else // Timeout
-                {
-                    _logger.LogError(ex, "Timeout when contacting {Backend} ({UpstreamUri}). Trying next backend...", selectedBackend.Name, upstreamUri);
-                    backendResponse?.Dispose();
-                    continue; // Try next backend on timeout
-                }
-            }
-            catch (Exception ex) // Catch broader exceptions
-            {
-                _logger.LogError(ex, "Unexpected error dispatching request to {Backend} ({UpstreamUri}). Trying next backend...", selectedBackend.Name, upstreamUri);
-                logEntry.UpstreamStatusCode = null; // No HTTP response received
-                logEntry.ErrorMessage = $"Dispatch Exception to '{selectedBackend.Name}': {ex.Message}";
-                logEntry.UpstreamResponseBody = null; // No response body
+                // Ensure backendResponse is disposed if loop continues without returning
+                finally { backendResponse?.Dispose(); }
+            } // End inner loop (backend retries for effectiveModelName)
 
-                // Treat most dispatch exceptions as retryable for the *next backend*
-                backendResponse?.Dispose(); // Dispose if partially created
-                // Don't log the main entry yet, let the loop continue to try other backends
-                // However, if this was the *last* backend, the main "All backends failed" log will cover it.
-                // We could add a per-backend attempt log here if detailed trail is needed.
-                if (ex is TaskCanceledException && context.RequestAborted.IsCancellationRequested)
-                {
-                    _logger.LogInformation("Client cancelled request during dispatch to {Backend}", selectedBackend.Name);
-                    logEntry.ErrorMessage = "Client cancelled request.";
-                    logEntry.WasSuccess = false;
-                    logEntry.ProxyResponseStatusCode = StatusCodes.Status499ClientClosedRequest; // Or just don't log final response
-                    await LogRequestAsync(logEntry);
-                    return; // Exit if client cancelled
-                }
-                continue; // Try next backend
-            }
+            // If we reach here, it means all backends for the current 'effectiveModelName' failed with retryable errors.
+            // The outer loop will now try to resolve the next 'effectiveModelName' if the initial request was a group.
+            _logger.LogWarning("All backends for effective model '{EffectiveModelName}' failed. Will try next group member if applicable.", effectiveModelName);
+        } // End outer loop (group member retries)
+    }
+
+    // Helper methods (IsRetryableError, RelayResponseAsync, TryExtractModelName, etc.)
+
+    private string? GetBackendPathSuffix(string requestPath)
+    {
+        if (requestPath.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+            return "chat/completions";
+        if (requestPath.EndsWith("/completions", StringComparison.OrdinalIgnoreCase))
+            return "completions";
+        if (requestPath.EndsWith("/embeddings", StringComparison.OrdinalIgnoreCase))
+            return "embeddings";
+        return null;
+    }
+
+    private bool TryConstructUpstreamUri(string configuredBaseUrl, string backendPathSuffix, out Uri? upstreamUri, out string errorMessage)
+    {
+        upstreamUri = null;
+        errorMessage = string.Empty;
+
+        if (string.IsNullOrEmpty(configuredBaseUrl))
+        {
+            errorMessage = "BaseUrl is empty or null.";
+            return false;
+        }
+
+        string baseUriStringForCombination = configuredBaseUrl;
+        if (!baseUriStringForCombination.EndsWith('/'))
+        {
+            baseUriStringForCombination += "/";
+        }
+
+        if (!Uri.TryCreate(baseUriStringForCombination, UriKind.Absolute, out var baseUri))
+        {
+            errorMessage = $"Invalid BaseUrl format: {configuredBaseUrl}";
+            return false;
+        }
+
+        try
+        {
+            upstreamUri = new Uri(baseUri, backendPathSuffix);
+            return true;
+        }
+        catch (UriFormatException ex)
+        {
+            errorMessage = $"Could not create upstream URI from BaseUrl '{configuredBaseUrl}' and suffix '{backendPathSuffix}': {ex.Message}";
+            return false;
         }
     }
 
-    // --- Keep IsRetryableError, RelayResponseAsync, TryExtractModelName as they were ---
+    private bool TryModifyRequestBodyModel(string originalBody, string newModelName, out string modifiedBody)
+    {
+        modifiedBody = originalBody;
+        try
+        {
+            var jsonNode = JsonNode.Parse(originalBody);
+            if (jsonNode is JsonObject jsonObject && jsonObject.ContainsKey("model"))
+            {
+                jsonObject["model"] = newModelName;
+                modifiedBody = jsonObject.ToJsonString();
+                return true;
+            }
+            else if (jsonNode is JsonObject jsonObjectForEmbed) // For /embeddings, model field might be at top level
+            {
+                // OpenAI embeddings take "model" and "input". Some other providers might vary.
+                // If it's an embedding request and we're overriding, we assume the 'model' field is what needs changing.
+                // This might need more specific handling if embedding request structures vary significantly.
+                if (jsonObjectForEmbed.ContainsKey("model"))
+                {
+                    jsonObjectForEmbed["model"] = newModelName;
+                    modifiedBody = jsonObjectForEmbed.ToJsonString();
+                    return true;
+                }
+            }
+            _logger.LogWarning("Could not find 'model' property in request body JSON to apply backend-specific model name, or JSON structure not recognized for override.");
+        }
+        catch (JsonException jsonEx)
+        {
+            _logger.LogError(jsonEx, "Failed to parse or modify request body JSON for backend-specific model name override.");
+        }
+        return false;
+    }
+
+    private void HandleBadRequest(string message, HttpContext context, ApiLogEntry logEntry)
+    {
+        _logger.LogWarning(message);
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        // Using WriteAsJsonAsync will set content type and write. No need to await here as it's the end of response.
+        context.Response.WriteAsJsonAsync(new ErrorResponse { Error = message });
+        logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
+        logEntry.WasSuccess = false;
+        logEntry.ErrorMessage = message;
+        // LogRequestAsync is fire-and-forget or should be awaited if critical before returning
+        _ = LogRequestAsync(logEntry);
+    }
+
+    private void SetFinalFailureResponse(HttpContext context, ApiLogEntry logEntry, string errorMessage)
+    {
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        // Using WriteAsJsonAsync.
+        context.Response.WriteAsJsonAsync(new ErrorResponse { Error = errorMessage });
+        logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
+        logEntry.WasSuccess = false;
+        logEntry.ErrorMessage = errorMessage;
+    }
+
     private bool IsRetryableError(HttpStatusCode statusCode)
     {
         return statusCode == HttpStatusCode.TooManyRequests // 429
@@ -339,21 +389,48 @@ public class DispatcherService
     private async Task RelayResponseAsync(HttpContext context, HttpResponseMessage upstreamResponse, bool isStreaming)
     {
         context.Response.StatusCode = (int)upstreamResponse.StatusCode;
+
+        // Define well-known header names as strings
+        const string ContentLengthHeader = "Content-Length";
+        const string TransferEncodingHeader = "Transfer-Encoding";
+        const string ContentTypeHeader = "Content-Type"; // For setting response content type
+        const string CacheControlHeader = "Cache-Control"; // For SSE
+        const string ConnectionHeader = "Connection"; // For SSE
+
         foreach (var header in upstreamResponse.Headers)
         {
+            // Don't copy Content-Length for streams from upstream, as chunked encoding will be used.
+            if (ContentLengthHeader.Equals(header.Key, StringComparison.OrdinalIgnoreCase) && isStreaming)
+                continue;
+            // Don't copy Transfer-Encoding as the proxy will handle its own transfer or ASP.NET Core will.
+            if (TransferEncodingHeader.Equals(header.Key, StringComparison.OrdinalIgnoreCase))
+                continue;
+
             context.Response.Headers[header.Key] = header.Value.ToArray();
         }
-        foreach (var header in upstreamResponse.Content.Headers)
+
+        foreach (var header in upstreamResponse.Content.Headers) // Copy content headers (like Content-Type)
         {
+            // Again, don't copy Content-Length for streams.
+            if (ContentLengthHeader.Equals(header.Key, StringComparison.OrdinalIgnoreCase) && isStreaming)
+                continue;
             context.Response.Headers[header.Key] = header.Value.ToArray();
         }
-        context.Response.Headers.Remove("Transfer-Encoding");
+
+        // Explicitly remove problematic headers if they snuck in or were set by default by Kestrel/ASP.NET Core
+        context.Response.Headers.Remove(TransferEncodingHeader);
+        if (isStreaming)
+        {
+            context.Response.Headers.Remove(ContentLengthHeader);
+        }
 
         if (isStreaming && upstreamResponse.IsSuccessStatusCode)
         {
-            context.Response.Headers.ContentType = "text/event-stream";
-            context.Response.Headers.CacheControl = "no-cache";
-            context.Response.Headers.Append("Connection", "keep-alive");
+            // Set SSE specific headers
+            context.Response.Headers[ContentTypeHeader] = "text/event-stream; charset=utf-8";
+            context.Response.Headers[CacheControlHeader] = "no-cache";
+            context.Response.Headers[ConnectionHeader] = "keep-alive";
+
             _logger.LogInformation("Relaying stream response from backend.");
             using var responseStream = await upstreamResponse.Content.ReadAsStreamAsync(context.RequestAborted);
             await responseStream.CopyToAsync(context.Response.Body, context.RequestAborted);
@@ -362,30 +439,43 @@ public class DispatcherService
         else
         {
             _logger.LogInformation("Relaying standard (non-stream) response from backend.");
-            var responseBody = await upstreamResponse.Content.ReadAsByteArrayAsync(context.RequestAborted);
-            await context.Response.Body.WriteAsync(responseBody, context.RequestAborted);
+            var responseBodyBytes = await upstreamResponse.Content.ReadAsByteArrayAsync(context.RequestAborted);
+
+            // For non-streaming, Content-Length might be important if not already set by ASP.NET Core
+            // and if the upstream response had it.
+            if (!isStreaming &&
+                !context.Response.Headers.ContainsKey(ContentLengthHeader) &&
+                upstreamResponse.Content.Headers.ContentLength.HasValue)
+            {
+                context.Response.Headers.ContentLength = upstreamResponse.Content.Headers.ContentLength.Value;
+            }
+            await context.Response.Body.WriteAsync(responseBodyBytes, context.RequestAborted);
             _logger.LogInformation("Standard relay finished.");
         }
     }
 
-    private string? TryExtractModelName(string requestBody)
+    private string? TryExtractModelName(string requestBody, string fieldName = "model")
     {
         if (string.IsNullOrWhiteSpace(requestBody))
             return null;
         try
         {
             var jsonNode = JsonNode.Parse(requestBody);
-            if (jsonNode != null && jsonNode["model"] != null)
+            if (jsonNode != null && jsonNode[fieldName] != null)
             {
-                return jsonNode["model"]!.GetValue<string>();
+                return jsonNode[fieldName]!.GetValue<string>();
             }
         }
         catch (JsonException ex)
         {
-            _logger.LogWarning(ex, "Failed to parse request body as JSON to extract model name.");
+            _logger.LogWarning(ex, "Failed to parse request body as JSON to extract '{Field}' name.", fieldName);
         }
         return null;
     }
-
-    #endregion Methods
 }
+
+// Add new field to ApiLogEntry.cs
+// Models/ApiLogEntry.cs
+// ... (existing fields) ...
+// public string? RequestedModel { get; set; } // General model requested by client (already exists)
+// public string? EffectiveModelName { get; set; } // The actual model used after group resolution (NEW)

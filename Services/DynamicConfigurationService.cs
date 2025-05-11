@@ -2,6 +2,7 @@
 using LLMProxy.Models;
 using System.Text.Json;
 using System.Collections.Concurrent;
+using System.Text.Json.Serialization; // Not strictly needed here as we load/save whole file
 
 namespace LLMProxy.Services;
 
@@ -9,7 +10,7 @@ public class DynamicConfigurationService
 {
     private readonly ILogger<DynamicConfigurationService> _logger;
     private readonly string _configFilePath;
-    private ConcurrentDictionary<string, ModelRoutingConfig> _modelConfigs = new();
+    private RoutingConfig _currentConfig = new(); // Store the entire config object
     private static readonly object _fileLock = new();
 
     public DynamicConfigurationService(ILogger<DynamicConfigurationService> logger, IConfiguration configuration)
@@ -17,7 +18,7 @@ public class DynamicConfigurationService
         _logger = logger;
         _configFilePath = Path.Combine(AppContext.BaseDirectory, "config", "dynamic_routing.json");
         EnsureConfigDirectoryExists();
-        LoadConfigFromFile(); // This will now potentially load defaults
+        LoadConfigFromFile();
     }
 
     private void EnsureConfigDirectoryExists()
@@ -43,16 +44,25 @@ public class DynamicConfigurationService
                     string json = File.ReadAllText(_configFilePath);
                     if (!string.IsNullOrWhiteSpace(json))
                     {
-                        var loadedConfig = JsonSerializer.Deserialize<RoutingConfig>(json);
-                        if (loadedConfig?.Models != null && loadedConfig.Models.Any())
+                        var loadedConfig = JsonSerializer.Deserialize<RoutingConfig>(json, new JsonSerializerOptions
                         {
-                            _modelConfigs = new ConcurrentDictionary<string, ModelRoutingConfig>(loadedConfig.Models);
-                            _logger.LogInformation("Successfully loaded {Count} model configurations from file.", _modelConfigs.Count);
-                            loadedFromFile = true; // Mark as loaded
+                            // Allow enums to be read as strings or numbers
+                            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: true) }
+                        });
+                        if (loadedConfig != null)
+                        {
+                            _currentConfig = loadedConfig;
+                            // Ensure dictionaries are initialized if null after deserialization
+                            _currentConfig.Models ??= new Dictionary<string, ModelRoutingConfig>();
+                            _currentConfig.ModelGroups ??= new Dictionary<string, ModelGroupConfig>();
+
+                            _logger.LogInformation("Successfully loaded dynamic configuration. Models: {ModelCount}, Model Groups: {GroupCount}",
+                                _currentConfig.Models.Count, _currentConfig.ModelGroups.Count);
+                            loadedFromFile = true;
                         }
                         else
                         {
-                            _logger.LogWarning("Dynamic configuration file exists but was empty or invalid JSON structure.");
+                            _logger.LogWarning("Dynamic configuration file existed but deserialized to null.");
                         }
                     }
                     else
@@ -65,24 +75,23 @@ public class DynamicConfigurationService
                     _logger.LogInformation("Dynamic configuration file not found at {FilePath}.", _configFilePath);
                 }
             }
+            catch (JsonException jsonEx)
+            {
+                _logger.LogError(jsonEx, "Error parsing dynamic configuration file {FilePath}. Check for malformed JSON (e.g. missing comma in sample provided by user for ModelGroups). Will proceed with defaults if applicable.", _configFilePath);
+                _currentConfig = new RoutingConfig { Models = new Dictionary<string, ModelRoutingConfig>(), ModelGroups = new Dictionary<string, ModelGroupConfig>() };
+            }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error reading or parsing dynamic configuration file {FilePath}. Will proceed with defaults if applicable.", _configFilePath);
-                // Ensure _modelConfigs is initialized even after error before potentially loading defaults
-                _modelConfigs = new ConcurrentDictionary<string, ModelRoutingConfig>();
+                _logger.LogError(ex, "Generic error reading dynamic configuration file {FilePath}. Will proceed with defaults if applicable.", _configFilePath);
+                _currentConfig = new RoutingConfig { Models = new Dictionary<string, ModelRoutingConfig>(), ModelGroups = new Dictionary<string, ModelGroupConfig>() };
             }
-        } // End lock
+        }
 
-        // If nothing was loaded from the file, load defaults
         if (!loadedFromFile)
         {
             _logger.LogInformation("Loading default debug configurations as no valid configuration was loaded from file.");
-            _modelConfigs = new ConcurrentDictionary<string, ModelRoutingConfig>(GetDefaultDebugConfig());
-
-            // Optional: Save the defaults to the file immediately so they appear on next load
-            // Be cautious if you *don't* want defaults to overwrite an intentionally empty file.
-            // If you want an empty file to mean "no config", comment out the SaveConfigToFile() call below.
-            if (_modelConfigs.Any())
+            _currentConfig = GetDefaultDebugConfig();
+            if (_currentConfig.Models.Any() || _currentConfig.ModelGroups.Any())
             {
                 _logger.LogInformation("Saving loaded default configurations to {FilePath}", _configFilePath);
                 SaveConfigToFile();
@@ -90,7 +99,6 @@ public class DynamicConfigurationService
         }
     }
 
-    // --- Keep SaveConfigToFile, GetCurrentConfig, TryGetModelRouting, UpdateModelConfiguration, DeleteModelConfiguration as they were ---
     private void SaveConfigToFile()
     {
         lock (_fileLock)
@@ -98,8 +106,11 @@ public class DynamicConfigurationService
             try
             {
                 _logger.LogInformation("Saving dynamic configuration to {FilePath}", _configFilePath);
-                var configToSave = new RoutingConfig { Models = new Dictionary<string, ModelRoutingConfig>(_modelConfigs) };
-                string json = JsonSerializer.Serialize(configToSave, new JsonSerializerOptions { WriteIndented = true });
+                string json = JsonSerializer.Serialize(_currentConfig, new JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: true) } // Ensure enums are written as strings
+                });
                 File.WriteAllText(_configFilePath, json);
                 _logger.LogInformation("Successfully saved dynamic configuration.");
             }
@@ -112,28 +123,34 @@ public class DynamicConfigurationService
 
     public RoutingConfig GetCurrentConfig()
     {
-        return new RoutingConfig { Models = new Dictionary<string, ModelRoutingConfig>(_modelConfigs) };
+        // Return a copy to prevent external modification of the live config object,
+        // though consumers should ideally not modify it.
+        // For simplicity, we'll return the direct reference for now, assuming services use it read-only mostly.
+        // If deep cloning is needed:
+        // var json = JsonSerializer.Serialize(_currentConfig);
+        // return JsonSerializer.Deserialize<RoutingConfig>(json);
+        return _currentConfig;
     }
 
     public bool TryGetModelRouting(string modelName, out ModelRoutingConfig? modelConfig)
     {
-        return _modelConfigs.TryGetValue(modelName, out modelConfig);
+        return _currentConfig.Models.TryGetValue(modelName, out modelConfig);
     }
 
     public bool UpdateModelConfiguration(string modelName, ModelRoutingConfig newConfig)
     {
         if (string.IsNullOrWhiteSpace(modelName) || newConfig == null)
             return false;
-        if (newConfig.Backends == null)
-            newConfig.Backends = new List<BackendConfig>();
+
+        newConfig.Backends ??= new List<BackendConfig>();
         newConfig.Backends.ForEach(b =>
         {
-            if (b.ApiKeys == null)
-                b.ApiKeys = new List<string>();
+            b.ApiKeys ??= new List<string>();
             if (string.IsNullOrWhiteSpace(b.Name))
-                b.Name = Guid.NewGuid().ToString("N").Substring(0, 8);
+                b.Name = Guid.NewGuid().ToString("N").Substring(0, 8); // Auto-generate name if empty
         });
-        _modelConfigs[modelName] = newConfig;
+
+        _currentConfig.Models[modelName] = newConfig;
         _logger.LogInformation("Updated configuration for model: {ModelName}", modelName);
         SaveConfigToFile();
         return true;
@@ -141,7 +158,7 @@ public class DynamicConfigurationService
 
     public bool DeleteModelConfiguration(string modelName)
     {
-        if (_modelConfigs.TryRemove(modelName, out _))
+        if (_currentConfig.Models.Remove(modelName))
         {
             _logger.LogInformation("Deleted configuration for model: {ModelName}", modelName);
             SaveConfigToFile();
@@ -151,74 +168,130 @@ public class DynamicConfigurationService
         return false;
     }
 
-    // --- NEW METHOD: Define default configurations ---
-    private Dictionary<string, ModelRoutingConfig> GetDefaultDebugConfig()
+    // --- New methods for Model Groups ---
+    public bool TryGetModelGroupRouting(string groupName, out ModelGroupConfig? groupConfig)
     {
-        // IMPORTANT: Replace "YOUR_..." placeholders with dummy or real keys for testing.
-        // Using placeholder strings will cause API calls to fail, but allows testing the UI.
-        return new Dictionary<string, ModelRoutingConfig>
+        return _currentConfig.ModelGroups.TryGetValue(groupName, out groupConfig);
+    }
+
+    public bool UpdateModelGroupConfiguration(string groupName, ModelGroupConfig newGroupConfig)
+    {
+        if (string.IsNullOrWhiteSpace(groupName) || newGroupConfig == null)
+            return false;
+
+        newGroupConfig.Models ??= new List<string>();
+        newGroupConfig.ContentRules ??= new List<ContentRule>();
+        // Basic validation for ContentRules and DefaultModelForContentBased
+        newGroupConfig.ContentRules.ForEach(rule =>
         {
+            if (string.IsNullOrWhiteSpace(rule.TargetModelName) || !newGroupConfig.Models.Contains(rule.TargetModelName))
             {
-                "gpt-4-debug", new ModelRoutingConfig
+                _logger.LogWarning("Invalid TargetModelName '{TargetModel}' in ContentRule for group '{GroupName}'. It must be one of the group's member models.", rule.TargetModelName, groupName);
+                // Decide: throw, remove rule, or log and proceed? For now, log. Admin UI should prevent this.
+            }
+        });
+        if (!string.IsNullOrWhiteSpace(newGroupConfig.DefaultModelForContentBased) && !newGroupConfig.Models.Contains(newGroupConfig.DefaultModelForContentBased))
+        {
+            _logger.LogWarning("Invalid DefaultModelForContentBased '{DefaultModel}' for group '{GroupName}'. It must be one of the group's member models. Clearing it.", newGroupConfig.DefaultModelForContentBased, groupName);
+            newGroupConfig.DefaultModelForContentBased = null; // Or handle error differently
+        }
+
+        _currentConfig.ModelGroups[groupName] = newGroupConfig;
+        _logger.LogInformation("Updated configuration for model group: {GroupName}", groupName);
+        SaveConfigToFile();
+        return true;
+    }
+
+    public bool DeleteModelGroupConfiguration(string groupName)
+    {
+        if (_currentConfig.ModelGroups.Remove(groupName))
+        {
+            _logger.LogInformation("Deleted configuration for model group: {GroupName}", groupName);
+            SaveConfigToFile();
+            return true;
+        }
+        _logger.LogWarning("Attempted to delete non-existent model group configuration: {GroupName}", groupName);
+        return false;
+    }
+
+    private RoutingConfig GetDefaultDebugConfig()
+    {
+        var defaultConfig = new RoutingConfig
+        {
+            Models = new Dictionary<string, ModelRoutingConfig>
+            {
                 {
-                    Strategy = RoutingStrategyType.Failover,
-                    Backends = new List<BackendConfig>
+                    "gpt-4-debug", new ModelRoutingConfig
                     {
-                        new BackendConfig
+                        Strategy = RoutingStrategyType.Failover,
+                        Backends = new List<BackendConfig>
                         {
-                            Name = "OpenAI-Debug-1",
-                            BaseUrl = "https://api.openai.com/v1",
-                            ApiKeys = new List<string> { "YOUR_OPENAI_KEY_1_OR_PLACEHOLDER" },
-                            Weight = 1,
-                            Enabled = true
+                            new BackendConfig { Name = "OpenAI-Debug-1", BaseUrl = "https://api.openai.com/v1", ApiKeys = new List<string> { "YOUR_OPENAI_KEY_1_OR_PLACEHOLDER" }, Enabled = true },
+                            new BackendConfig { Name = "OpenAI-Debug-2", BaseUrl = "https://api.openai.com/v1", ApiKeys = new List<string> { "YOUR_OPENAI_KEY_2_OR_PLACEHOLDER" }, Enabled = true }
+                        }
+                    }
+                },
+                {
+                    "mistral-debug", new ModelRoutingConfig
+                    {
+                        Strategy = RoutingStrategyType.RoundRobin,
+                        Backends = new List<BackendConfig>
+                        {
+                            new BackendConfig { Name = "Mistral-Debug", BaseUrl = "https://api.mistral.ai/v1", ApiKeys = new List<string> { "YOUR_MISTRAL_KEY_OR_PLACEHOLDER" }, Enabled = true }
+                        }
+                    }
+                },
+                {
+                    "phi-3-mini-debug", new ModelRoutingConfig
+                    {
+                        Strategy = RoutingStrategyType.Failover,
+                        Backends = new List<BackendConfig>
+                        {
+                            new BackendConfig { Name = "LMStudio-Phi3", BaseUrl = "http://localhost:1234/v1", ApiKeys = new List<string> { "lm-studio" }, BackendModelName = "microsoft/Phi-3-mini-4k-instruct-gguf", Enabled = true }
+                        }
+                    }
+                }
+            },
+            ModelGroups = new Dictionary<string, ModelGroupConfig>
+            {
+                {
+                    "DebugCoderGroup", new ModelGroupConfig
+                    {
+                        Strategy = RoutingStrategyType.Failover,
+                        Models = new List<string> { "mistral-debug", "gpt-4-debug" } // Assumes these models are defined above
+                    }
+                },
+                {
+                    "SmartChatGroup-Debug", new ModelGroupConfig
+                    {
+                        Strategy = RoutingStrategyType.ContentBased,
+                        Models = new List<string> { "phi-3-mini-debug", "gpt-4-debug" }, // These models must be in the Models dict
+                        ContentRules = new List<ContentRule>
+                        {
+                            new ContentRule { RegexPattern = "(summarize|summary)", TargetModelName = "phi-3-mini-debug", Priority = 0 },
+                            new ContentRule { RegexPattern = "(code|python|javascript)", TargetModelName = "gpt-4-debug", Priority = 0 }
                         },
-                        new BackendConfig
-                        {
-                            Name = "OpenAI-Debug-2",
-                            BaseUrl = "https://api.openai.com/v1",
-                            ApiKeys = new List<string> { "YOUR_OPENAI_KEY_2_OR_PLACEHOLDER" },
-                            Weight = 1,
-                            Enabled = true
-                        }
-                    }
-                }
-            },
-            {
-                "mistral-debug", new ModelRoutingConfig
-                {
-                    Strategy = RoutingStrategyType.RoundRobin,
-                    Backends = new List<BackendConfig>
-                    {
-                        new BackendConfig
-                        {
-                            Name = "Mistral-Debug",
-                            BaseUrl = "https://api.mistral.ai/v1", // Correct Mistral endpoint
-                            ApiKeys = new List<string> { "YOUR_MISTRAL_KEY_OR_PLACEHOLDER" },
-                            Weight = 1,
-                            Enabled = true
-                        }
-                        // Add another Mistral backend/key here if you want to test RoundRobin properly
-                    }
-                }
-            },
-             {
-                "deepseek-debug", new ModelRoutingConfig
-                {
-                    Strategy = RoutingStrategyType.Failover,
-                    Backends = new List<BackendConfig>
-                    {
-                        new BackendConfig
-                        {
-                            Name = "DeepSeek-Debug",
-                            BaseUrl = "https://api.deepseek.com/v1", // Correct DeepSeek endpoint
-                            ApiKeys = new List<string> { "YOUR_DEEPSEEK_KEY_OR_PLACEHOLDER" },
-                            Weight = 1,
-                            Enabled = true
-                        }
+                        DefaultModelForContentBased = "phi-3-mini-debug"
                     }
                 }
             }
-            // Add more default models as needed
         };
+        // Validate that models referenced in groups exist
+        foreach (var groupPair in defaultConfig.ModelGroups.ToList()) // ToList to allow modification
+        {
+            var group = groupPair.Value;
+            group.Models.RemoveAll(modelName => !defaultConfig.Models.ContainsKey(modelName));
+            group.ContentRules.RemoveAll(rule => !group.Models.Contains(rule.TargetModelName));
+            if (!string.IsNullOrWhiteSpace(group.DefaultModelForContentBased) && !group.Models.Contains(group.DefaultModelForContentBased))
+            {
+                group.DefaultModelForContentBased = group.Models.FirstOrDefault();
+            }
+            if (!group.Models.Any()) // If a group has no valid member models, remove the group
+            {
+                defaultConfig.ModelGroups.Remove(groupPair.Key);
+                _logger.LogWarning("Default debug group '{GroupName}' removed because it had no valid member models after validation.", groupPair.Key);
+            }
+        }
+        return defaultConfig;
     }
 }

@@ -79,5 +79,16 @@ namespace LLMProxy.Models
         {
             get; set;
         } // General model requested by client
+
+        /// <summary>
+        /// The actual model name used for the backend call after group resolution.
+        /// If the request was directly for a model, this will be the same as RequestedModel.
+        /// If the request was for a group, this will be the member model selected by the group's strategy.
+        /// </summary>
+        [MaxLength(128)]
+        public string? EffectiveModelName
+        {
+            get; set;
+        }
     }
 }

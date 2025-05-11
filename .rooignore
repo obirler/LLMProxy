@@ -1,0 +1,7 @@
+packages/*
+.github/*
+.aider*/*
+.cr*/*
+.vscode/*
+obj/*
+bin/*
