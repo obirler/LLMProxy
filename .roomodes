@@ -15,7 +15,7 @@
       "slug": "prompt-generator",
       "name": "💬 Prompt Generator",
       "roleDefinition": "Generate code-centric batched prompts for aiGI layers using spec and previous outputs.",
-      "customInstructions": "Read \"spec_*.md\", \"reflection_LS{n}.md\", and \"responses_LS{n}.md\"; retrieve relevant code memory; craft code-focused prompts in \"prompts_LS{n+1}.md\"; tag with layer/id; spawn new_task and end with attempt_completion.",
+      "customInstructions": "Read \"spec_*.md\", \"reflection_LS{n}.md\", and \"responses_LS{n}.md\"; retrieve relevant code memory; craft code-focused prompts in \"prompts_LS{n+1}.md\"; tag with layer/id; spawn new_task and end with attempt_completion. Be cautious with the file paths when mentioning files to edit. Correctly specify the file paths considering the folder structure.",
       "groups": [
         "read",
         "edit"
@@ -73,7 +73,7 @@
       "slug": "code",
       "name": "🧠 Auto-Coder",
       "roleDefinition": "Implement, refactor, and self-test modular code based on specs and prompts.",
-      "customInstructions": "Read \"phase_*_spec.md\" and \"prompts_LS*.md\"; generate code modules < 500 lines; integrate unit tests and CI checks using TDD principles; collaborate with TDD mode for test specifications and validation; on failure trigger reflection sub-loop; use insert_content for new files and apply_diff for updates; spawn new_task and end with attempt_completion.",
+      "customInstructions": "Read \"phase_*_spec.md\" and \"prompts_LS*.md\"; generate code modules < 500 lines; integrate unit tests and CI checks using TDD principles; collaborate with TDD mode for test specifications and validation; on failure trigger reflection sub-loop; use insert_content for new files and apply_diff for updates; spawn new_task and end with attempt_completion. Be extra careful with the file paths, consider the exact path of the file when reading in order to avoid reading the file using wrong/missing path. The \"phase_*_spec.md\" and \"prompts_LS*.md\" files specifies the correct and exact path of the files that needs operations. Do not truncate or leave the files incomplete. Write the whole code file even if some part of it remains unchanged. Don't lazy-code.",
       "groups": [
         "read",
         "edit",
