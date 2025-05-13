@@ -13,11 +13,7 @@ namespace LLMProxy.Services;
 
 public class DispatcherService
 {
-    private const string BackendClientName = "LLMBackendClient";
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly RoutingService _routingService;
-    private readonly ILogger<DispatcherService> _logger;
-    private readonly IServiceScopeFactory _scopeFactory;
+    #region Constructors
 
     public DispatcherService(IHttpClientFactory httpClientFactory, RoutingService routingService, ILogger<DispatcherService> logger, IServiceScopeFactory scopeFactory)
     {
@@ -27,13 +23,23 @@ public class DispatcherService
         _scopeFactory = scopeFactory;
     }
 
-    private async Task LogRequestAsync(ApiLogEntry logEntry)
-    {
-        using var scope = _scopeFactory.CreateScope();
-        var dbContext = scope.ServiceProvider.GetRequiredService<ProxyDbContext>();
-        dbContext.ApiLogEntries.Add(logEntry);
-        await dbContext.SaveChangesAsync();
-    }
+    #endregion Constructors
+
+    #region Fields
+
+    private const string BackendClientName = "LLMBackendClient";
+
+    private readonly IHttpClientFactory _httpClientFactory;
+
+    private readonly RoutingService _routingService;
+
+    private readonly ILogger<DispatcherService> _logger;
+
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    #endregion Fields
+
+    #region Methods
 
     public async Task DispatchRequestAsync(HttpContext context)
     {
@@ -173,57 +179,96 @@ public class DispatcherService
                 // Copy other relevant headers from context.Request.Headers if needed
 
                 _logger.LogInformation("Dispatching to {Backend} ({UpstreamUri}) for effective model '{EffectiveModel}' (using model ID '{ModelForBackend}' for backend).",
-                    selectedBackend.Name, upstreamUri, effectiveModelName, modelNameToLogForBackend);
+     selectedBackend.Name, upstreamUri, effectiveModelName, modelNameToLogForBackend);
 
+                HttpResponseMessage? currentBackendResponse = null; // Renamed from backendResponse to avoid conflict
                 try
                 {
                     HttpCompletionOption completionOption = isStreaming ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead;
-                    backendResponse = await httpClient.SendAsync(upstreamRequest, completionOption, context.RequestAborted);
-                    logEntry.UpstreamStatusCode = (int)backendResponse.StatusCode;
+                    currentBackendResponse = await httpClient.SendAsync(upstreamRequest, completionOption, context.RequestAborted);
 
-                    if (!isStreaming || !backendResponse.IsSuccessStatusCode)
+                    logEntry.UpstreamStatusCode = (int)currentBackendResponse.StatusCode;
+
+                    // The full response body will be captured by RelayResponseAsync.
+                    // We will set logEntry.UpstreamResponseBody after calling it.
+                    // No need to read currentBackendResponse.Content here for logging the body anymore.
+
+                    if (currentBackendResponse.IsSuccessStatusCode)
                     {
-                        logEntry.UpstreamResponseBody = await backendResponse.Content.ReadAsStringAsync(context.RequestAborted);
-                        // Truncate for log if too long
-                        if (logEntry.UpstreamResponseBody != null && logEntry.UpstreamResponseBody.Length > 1000)
+                        _logger.LogInformation("Successful status ({StatusCode}) from {Backend} for effective model '{EffectiveModel}'. Relaying and checking content...",
+                            currentBackendResponse.StatusCode, selectedBackend.Name, effectiveModelName);
+
+                        var (relayCompleted, internalErrorInContent, relayedBody) = await RelayResponseAsync(context, currentBackendResponse, isStreaming, selectedBackend.Name, _logger);
+
+                        // Log the full relayed body (streamed or non-streamed)
+                        if (relayedBody != null)
                         {
-                            logEntry.UpstreamResponseBody = logEntry.UpstreamResponseBody.Substring(0, 1000) + "... (truncated)";
+                            logEntry.UpstreamResponseBody = relayedBody.Length > 200000 ? relayedBody.Substring(0, 200000) + "... (truncated for log)" : relayedBody; // Increased truncation limit
                         }
-                    }
 
-                    if (backendResponse.IsSuccessStatusCode)
-                    {
-                        _logger.LogInformation("Successful response ({StatusCode}) from {Backend} for effective model '{EffectiveModel}'.",
-                            backendResponse.StatusCode, selectedBackend.Name, effectiveModelName);
-                        await RelayResponseAsync(context, backendResponse, isStreaming);
-                        logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
-                        logEntry.WasSuccess = true;
-                        await LogRequestAsync(logEntry);
-                        return; // Successful completion of the entire request
-                    }
-                    else // Non-success status code from backend
-                    {
-                        logEntry.ErrorMessage = $"Backend '{selectedBackend.Name}' Error: {backendResponse.StatusCode}. Body: {logEntry.UpstreamResponseBody ?? "N/A"}";
-                        _logger.LogWarning("Backend {Backend} returned {StatusCode} for effective model '{EffectiveModel}'.",
-                            selectedBackend.Name, backendResponse.StatusCode, effectiveModelName);
-
-                        if (IsRetryableError(backendResponse.StatusCode))
+                        if (!relayCompleted)
                         {
-                            _logger.LogInformation("Retryable error from {Backend}. Trying next backend for '{EffectiveModel}'.", selectedBackend.Name, effectiveModelName);
-                            backendResponse.Dispose(); // Dispose before retrying with next backend
-                            // Continue inner loop for next backend
+                            _logger.LogWarning("Relay did not complete for backend {BackendName}. Client might have disconnected.", selectedBackend.Name);
+                            logEntry.ErrorMessage = $"Relay failed or was cancelled for backend {selectedBackend.Name}.";
+                            logEntry.WasSuccess = false;
+                            await LogRequestAsync(logEntry);
+                            currentBackendResponse.Dispose();
+                            return;
+                        }
+
+                        if (internalErrorInContent)
+                        {
+                            _logger.LogWarning("Backend {Backend} ({UpstreamUri}) returned {StatusCode} OK but an application-level error was detected in the content. Treating as retryable for backend selection.",
+                                selectedBackend.Name, upstreamUri, currentBackendResponse.StatusCode);
+                            logEntry.ErrorMessage = $"Backend '{selectedBackend.Name}' (URI: {upstreamUri}) returned {currentBackendResponse.StatusCode} OK with internal error (content indicates failure). Body: {logEntry.UpstreamResponseBody ?? "N/A"}";
+                            logEntry.WasSuccess = false;
+                            currentBackendResponse.Dispose();
                             continue;
                         }
-                        else // Non-retryable error from this backend
+                        else
+                        {
+                            logEntry.WasSuccess = true;
+                            logEntry.ErrorMessage = null;
+                            await LogRequestAsync(logEntry);
+                            currentBackendResponse.Dispose();
+                            return;
+                        }
+                    }
+                    else // Non-success status code from backend (e.g., 4xx, 5xx from backend directly)
+                    {
+                        // For direct errors from backend, read the content here for logging
+                        if (currentBackendResponse.Content != null)
+                        {
+                            var errorBody = await currentBackendResponse.Content.ReadAsStringAsync(context.RequestAborted);
+                            logEntry.UpstreamResponseBody = errorBody.Length > 1000 ? errorBody.Substring(0, 1000) + "... (truncated)" : errorBody;
+                        }
+
+                        logEntry.ErrorMessage = $"Backend '{selectedBackend.Name}' Error: {currentBackendResponse.StatusCode}. Body: {logEntry.UpstreamResponseBody ?? "N/A"}";
+                        _logger.LogWarning("Backend {Backend} returned {StatusCode} for effective model '{EffectiveModel}'. Upstream Body: {UpstreamBody}",
+                            selectedBackend.Name, currentBackendResponse.StatusCode, effectiveModelName, logEntry.UpstreamResponseBody ?? "N/A");
+
+                        if (IsRetryableError(currentBackendResponse.StatusCode))
+                        {
+                            _logger.LogInformation("Retryable error from {Backend}. Trying next backend for '{EffectiveModel}'.", selectedBackend.Name, effectiveModelName);
+                            currentBackendResponse.Dispose();
+                            continue;
+                        }
+                        else
                         {
                             _logger.LogError("Non-retryable error ({StatusCode}) from {Backend} for '{EffectiveModel}'. Relaying error to client.",
-                                backendResponse.StatusCode, selectedBackend.Name, effectiveModelName);
-                            await RelayResponseAsync(context, backendResponse, isStreaming); // Relay the specific error
+                                currentBackendResponse.StatusCode, selectedBackend.Name, effectiveModelName);
+
+                            // Relay the original error response from the backend.
+                            // The body for RelayResponseAsync will be read from currentBackendResponse again.
+                            // We pass false for isStreaming as this is a direct error relay.
+                            // The relayedBody from this call isn't strictly needed for the logEntry here as we've already captured it.
+                            await RelayResponseAsync(context, currentBackendResponse, false, selectedBackend.Name, _logger);
+
                             logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
                             logEntry.WasSuccess = false;
-                            // ErrorMessage already set for this attempt
                             await LogRequestAsync(logEntry);
-                            return; // Fail the entire request with this backend's non-retryable error
+                            currentBackendResponse.Dispose();
+                            return;
                         }
                     }
                 }
@@ -231,11 +276,10 @@ public class DispatcherService
                 {
                     _logger.LogError(ex, "HTTP request exception for {Backend} ({UpstreamUri}) for model '{EffectiveModel}'. Trying next backend.", selectedBackend.Name, upstreamUri, effectiveModelName);
                     logEntry.ErrorMessage = $"HTTP Exception for backend {selectedBackend.Name}: {ex.Message}";
-                    backendResponse?.Dispose();
-                    // Continue inner loop for next backend
-                    continue;
+                    currentBackendResponse?.Dispose();
+                    continue; // Continue inner loop for next backend
                 }
-                catch (TaskCanceledException ex) // Handles timeouts and client cancellations
+                catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException || context.RequestAborted.IsCancellationRequested) // Catches timeouts and client cancellations
                 {
                     if (context.RequestAborted.IsCancellationRequested)
                     {
@@ -243,37 +287,50 @@ public class DispatcherService
                         logEntry.ErrorMessage = "Client cancelled request.";
                         logEntry.WasSuccess = false;
                         logEntry.ProxyResponseStatusCode = 499; // Client Closed Request
-                        await LogRequestAsync(logEntry); // Log attempt
-                        backendResponse?.Dispose();
+                                                                // Don't try to write to response if client closed it.
+                        currentBackendResponse?.Dispose();
+                        // Log the attempt, but don't try to send response to client.
+                        // Use a separate task to avoid issues if the request is fully aborted.
+                        _ = LogRequestAsync(logEntry);
                         return;
                     }
                     else // Timeout
                     {
                         _logger.LogError(ex, "Timeout contacting {Backend} ({UpstreamUri}) for model '{EffectiveModel}'. Trying next backend.", selectedBackend.Name, upstreamUri, effectiveModelName);
                         logEntry.ErrorMessage = $"Timeout for backend {selectedBackend.Name}";
-                        backendResponse?.Dispose();
-                        // Continue inner loop for next backend
-                        continue;
+                        currentBackendResponse?.Dispose();
+                        continue; // Continue inner loop for next backend on timeout
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) // Catch broader exceptions during dispatch
                 {
                     _logger.LogError(ex, "Unexpected error dispatching to {Backend} ({UpstreamUri}) for model '{EffectiveModel}'. Trying next backend.", selectedBackend.Name, upstreamUri, effectiveModelName);
-                    logEntry.UpstreamStatusCode = null;
+                    logEntry.UpstreamStatusCode = null; // No HTTP response received or processed
                     logEntry.ErrorMessage = $"Dispatch Exception for backend {selectedBackend.Name}: {ex.Message}";
                     logEntry.UpstreamResponseBody = null;
-                    backendResponse?.Dispose();
-                    // Continue inner loop for next backend
-                    continue;
+                    currentBackendResponse?.Dispose();
+                    continue; // Try next backend
                 }
-                // Ensure backendResponse is disposed if loop continues without returning
-                finally { backendResponse?.Dispose(); }
+                finally
+                {
+                    // Ensure the response is disposed if not already handled by a return/continue path that disposes it.
+                    // However, most paths above now explicitly dispose. This is a safeguard.
+                    currentBackendResponse?.Dispose();
+                }
             } // End inner loop (backend retries for effectiveModelName)
 
             // If we reach here, it means all backends for the current 'effectiveModelName' failed with retryable errors.
             // The outer loop will now try to resolve the next 'effectiveModelName' if the initial request was a group.
             _logger.LogWarning("All backends for effective model '{EffectiveModelName}' failed. Will try next group member if applicable.", effectiveModelName);
         } // End outer loop (group member retries)
+    }
+
+    private async Task LogRequestAsync(ApiLogEntry logEntry)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ProxyDbContext>();
+        dbContext.ApiLogEntries.Add(logEntry);
+        await dbContext.SaveChangesAsync();
     }
 
     // Helper methods (IsRetryableError, RelayResponseAsync, TryExtractModelName, etc.)
@@ -386,72 +443,200 @@ public class DispatcherService
             || (int)statusCode >= 500; // 5xx errors
     }
 
-    private async Task RelayResponseAsync(HttpContext context, HttpResponseMessage upstreamResponse, bool isStreaming)
+    private async Task<(bool relayCompletedSuccessfully, bool internalErrorDetectedInContent, string? fullResponseBody)> RelayResponseAsync(
+    HttpContext context,
+    HttpResponseMessage upstreamResponse,
+    bool isStreaming,
+    string backendNameForErrorCheck, // For logging within ContainsApplicationLevelError
+    ILogger loggerForErrorCheck) // Pass logger for ContainsApplicationLevelError
     {
-        context.Response.StatusCode = (int)upstreamResponse.StatusCode;
+        bool internalErrorDetectedInContent = false;
+        bool relayCompletedSuccessfully = false;
+        string? fullResponseBody = null; // To store the complete response body
 
-        // Define well-known header names as strings
-        const string ContentLengthHeader = "Content-Length";
-        const string TransferEncodingHeader = "Transfer-Encoding";
-        const string ContentTypeHeader = "Content-Type"; // For setting response content type
-        const string CacheControlHeader = "Cache-Control"; // For SSE
-        const string ConnectionHeader = "Connection"; // For SSE
-
-        foreach (var header in upstreamResponse.Headers)
+        try
         {
-            // Don't copy Content-Length for streams from upstream, as chunked encoding will be used.
-            if (ContentLengthHeader.Equals(header.Key, StringComparison.OrdinalIgnoreCase) && isStreaming)
-                continue;
-            // Don't copy Transfer-Encoding as the proxy will handle its own transfer or ASP.NET Core will.
-            if (TransferEncodingHeader.Equals(header.Key, StringComparison.OrdinalIgnoreCase))
-                continue;
+            context.Response.StatusCode = (int)upstreamResponse.StatusCode;
 
-            context.Response.Headers[header.Key] = header.Value.ToArray();
-        }
+            // ... (header copying logic remains the same) ...
+            const string ContentLengthHeader = "Content-Length";
+            const string TransferEncodingHeader = "Transfer-Encoding";
+            const string ContentTypeHeader = "Content-Type";
+            const string CacheControlHeader = "Cache-Control";
+            const string ConnectionHeader = "Connection";
 
-        foreach (var header in upstreamResponse.Content.Headers) // Copy content headers (like Content-Type)
-        {
-            // Again, don't copy Content-Length for streams.
-            if (ContentLengthHeader.Equals(header.Key, StringComparison.OrdinalIgnoreCase) && isStreaming)
-                continue;
-            context.Response.Headers[header.Key] = header.Value.ToArray();
-        }
-
-        // Explicitly remove problematic headers if they snuck in or were set by default by Kestrel/ASP.NET Core
-        context.Response.Headers.Remove(TransferEncodingHeader);
-        if (isStreaming)
-        {
-            context.Response.Headers.Remove(ContentLengthHeader);
-        }
-
-        if (isStreaming && upstreamResponse.IsSuccessStatusCode)
-        {
-            // Set SSE specific headers
-            context.Response.Headers[ContentTypeHeader] = "text/event-stream; charset=utf-8";
-            context.Response.Headers[CacheControlHeader] = "no-cache";
-            context.Response.Headers[ConnectionHeader] = "keep-alive";
-
-            _logger.LogInformation("Relaying stream response from backend.");
-            using var responseStream = await upstreamResponse.Content.ReadAsStreamAsync(context.RequestAborted);
-            await responseStream.CopyToAsync(context.Response.Body, context.RequestAborted);
-            _logger.LogInformation("Stream relay finished.");
-        }
-        else
-        {
-            _logger.LogInformation("Relaying standard (non-stream) response from backend.");
-            var responseBodyBytes = await upstreamResponse.Content.ReadAsByteArrayAsync(context.RequestAborted);
-
-            // For non-streaming, Content-Length might be important if not already set by ASP.NET Core
-            // and if the upstream response had it.
-            if (!isStreaming &&
-                !context.Response.Headers.ContainsKey(ContentLengthHeader) &&
-                upstreamResponse.Content.Headers.ContentLength.HasValue)
+            foreach (var header in upstreamResponse.Headers)
             {
-                context.Response.Headers.ContentLength = upstreamResponse.Content.Headers.ContentLength.Value;
+                if (ContentLengthHeader.Equals(header.Key, StringComparison.OrdinalIgnoreCase) && isStreaming)
+                    continue;
+                if (TransferEncodingHeader.Equals(header.Key, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                context.Response.Headers[header.Key] = header.Value.ToArray();
             }
-            await context.Response.Body.WriteAsync(responseBodyBytes, context.RequestAborted);
-            _logger.LogInformation("Standard relay finished.");
+            foreach (var header in upstreamResponse.Content.Headers)
+            {
+                if (ContentLengthHeader.Equals(header.Key, StringComparison.OrdinalIgnoreCase) && isStreaming)
+                    continue;
+                context.Response.Headers[header.Key] = header.Value.ToArray();
+            }
+            context.Response.Headers.Remove(TransferEncodingHeader);
+            if (isStreaming)
+                context.Response.Headers.Remove(ContentLengthHeader);
+
+            if (isStreaming && upstreamResponse.IsSuccessStatusCode)
+            {
+                context.Response.Headers[ContentTypeHeader] = "text/event-stream; charset=utf-8";
+                context.Response.Headers[CacheControlHeader] = "no-cache";
+                context.Response.Headers[ConnectionHeader] = "keep-alive";
+
+                loggerForErrorCheck.LogInformation("Relaying stream response from backend {BackendName}.", backendNameForErrorCheck);
+
+                using var responseStream = await upstreamResponse.Content.ReadAsStreamAsync(context.RequestAborted);
+                using var memoryBufferForInspection = new MemoryStream();
+
+                byte[] buffer = new byte[81920]; // 80KB buffer
+                int bytesRead;
+
+                while ((bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length, context.RequestAborted)) > 0)
+                {
+                    await context.Response.Body.WriteAsync(buffer, 0, bytesRead, context.RequestAborted);
+                    await context.Response.Body.FlushAsync(context.RequestAborted);
+                    await memoryBufferForInspection.WriteAsync(buffer, 0, bytesRead, context.RequestAborted);
+                }
+                loggerForErrorCheck.LogInformation("Stream relay finished for backend {BackendName}.", backendNameForErrorCheck);
+                relayCompletedSuccessfully = true;
+
+                memoryBufferForInspection.Position = 0;
+                using var streamReader = new StreamReader(memoryBufferForInspection, Encoding.UTF8);
+                fullResponseBody = await streamReader.ReadToEndAsync(); // Capture full streamed response
+                if (ContainsApplicationLevelError(fullResponseBody, backendNameForErrorCheck, loggerForErrorCheck))
+                {
+                    internalErrorDetectedInContent = true;
+                }
+            }
+            else // Non-streaming or non-success status code from upstream
+            {
+                loggerForErrorCheck.LogInformation("Relaying standard (non-stream) response from backend {BackendName}.", backendNameForErrorCheck);
+                var responseBodyBytes = await upstreamResponse.Content.ReadAsByteArrayAsync(context.RequestAborted);
+                fullResponseBody = Encoding.UTF8.GetString(responseBodyBytes); // Capture full non-streamed response
+
+                if (!isStreaming && !context.Response.Headers.ContainsKey(ContentLengthHeader) && upstreamResponse.Content.Headers.ContentLength.HasValue)
+                {
+                    context.Response.Headers.ContentLength = upstreamResponse.Content.Headers.ContentLength.Value;
+                }
+                await context.Response.Body.WriteAsync(responseBodyBytes, context.RequestAborted);
+                loggerForErrorCheck.LogInformation("Standard relay finished for backend {BackendName}.", backendNameForErrorCheck);
+                relayCompletedSuccessfully = true;
+
+                if (upstreamResponse.IsSuccessStatusCode)
+                {
+                    if (ContainsApplicationLevelError(fullResponseBody, backendNameForErrorCheck, loggerForErrorCheck))
+                    {
+                        internalErrorDetectedInContent = true;
+                    }
+                }
+            }
         }
+        catch (OperationCanceledException ex)
+        {
+            loggerForErrorCheck.LogInformation(ex, "Relay operation cancelled for backend {BackendName}. Client likely disconnected.", backendNameForErrorCheck);
+            relayCompletedSuccessfully = false;
+        }
+        catch (Exception ex)
+        {
+            loggerForErrorCheck.LogError(ex, "Error during relay from backend {BackendName}.", backendNameForErrorCheck);
+            relayCompletedSuccessfully = false;
+        }
+        return (relayCompletedSuccessfully, internalErrorDetectedInContent, fullResponseBody);
+    }
+
+    // Add this new helper method to DispatcherService
+    private bool ContainsApplicationLevelError(string responseContent, string backendName, ILogger logger)
+    {
+        if (string.IsNullOrWhiteSpace(responseContent))
+        {
+            return false;
+        }
+
+        // Normalize for easier checking, but be mindful if case sensitivity is needed for some errors.
+        // For now, ToLowerInvariant is a reasonable approach for broad checks.
+        string lowerResponse = responseContent.ToLowerInvariant(); // Do this once
+
+        // 1. Check for OpenAI/OpenRouter style JSON error object at the root
+        //    Example: { "error": { "message": "...", "code": ... } }
+        if (lowerResponse.Contains("\"error\":")) // Quick check before parsing
+        {
+            try
+            {
+                var jsonNode = JsonNode.Parse(responseContent); // Parse original content for case sensitivity if needed by structure
+                if (jsonNode?["error"] is JsonObject errorObject)
+                {
+                    // You can be more specific here, e.g., check errorObject["code"] or specific messages.
+                    // For instance, some 400 errors are non-retryable from the proxy's perspective (bad client request),
+                    // but a 400 error like "context_length_exceeded" from the backend *is* something we might want the proxy to retry with another backend.
+                    // The user's example had a "code: 400" inside a 200 OK response's error object.
+                    var messageNode = errorObject["message"];
+                    string errorMessage = messageNode?.GetValue<string>()?.ToLowerInvariant() ?? "";
+
+                    logger.LogWarning("Detected JSON error structure in response from backend {BackendName}. Message: {ErrorMessage}", backendName, errorMessage);
+
+                    if (errorMessage.Contains("maximum context length") || errorMessage.Contains("tokens. however, you requested"))
+                    {
+                        return true; // Specific known retryable error message
+                    }
+                    // Add other specific message checks from JSON errors if needed.
+                    // If it's a generic JSON error and we're not sure, we might decide to retry.
+                    // For now, any "error" object in a 200 OK is suspicious.
+                    return true;
+                }
+            }
+            catch (JsonException ex)
+            {
+                logger.LogDebug(ex, "Tried to parse response from {BackendName} as JSON for error check but failed. Content might not be JSON or malformed.", backendName);
+            }
+        }
+
+        // 2. Check for known error substrings in the general response (could be HTML, plain text, or non-root JSON error)
+        //    These should ideally be configurable.
+        var knownErrorSubstrings = new List<string>
+    {
+        "maximum context length",       // General phrase
+        "tokens. however, you requested", // From user's example, more specific
+        "context_length_exceeded",      // Common error code as text
+        "model_not_found",              // Some APIs might return this in a 200 OK with an error object/text
+        "insufficient_quota",           // Could be a 200 OK with an error message
+        "input validation error"        // General validation error
+    };
+
+        foreach (var sub in knownErrorSubstrings)
+        {
+            if (lowerResponse.Contains(sub))
+            {
+                logger.LogWarning("Detected known error substring '{Substring}' in response from backend {BackendName}.", sub, backendName);
+                return true;
+            }
+        }
+
+        // 3. Anthropic specific error in stream (often comes as a separate JSON object if streaming)
+        // Example: {"type": "error", "error": {"type": "overloaded_error", "message": "Anthropic's API is temporarily overloaded"}}
+        if (lowerResponse.Contains("\"type\":\"error\"") && lowerResponse.Contains("\"error\":"))
+        { // Quick check
+            try
+            {
+                // This might need to handle multiple JSON objects in a stream if not already parsed as a single one.
+                // For simplicity, if the string contains this pattern, assume it's an error.
+                // A more robust solution would parse line by line if it's a stream of JSON objects.
+                var jsonNode = JsonNode.Parse(responseContent);
+                if (jsonNode?["type"]?.GetValue<string>() == "error" && jsonNode?["error"] is JsonObject)
+                {
+                    logger.LogWarning("Detected Anthropic-style error structure in response from backend {BackendName}.", backendName);
+                    return true;
+                }
+            }
+            catch (JsonException) { /* Ignore if not parseable as a single JSON object */ }
+        }
+
+        return false;
     }
 
     private string? TryExtractModelName(string requestBody, string fieldName = "model")
@@ -472,10 +657,6 @@ public class DispatcherService
         }
         return null;
     }
-}
 
-// Add new field to ApiLogEntry.cs
-// Models/ApiLogEntry.cs
-// ... (existing fields) ...
-// public string? RequestedModel { get; set; } // General model requested by client (already exists)
-// public string? EffectiveModelName { get; set; } // The actual model used after group resolution (NEW)
+    #endregion Methods
+}
