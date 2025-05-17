@@ -5,88 +5,91 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LLM Proxy Admin</title>
     <link rel="icon" href="/icon.ico" type="image/x-icon">
+    <!-- Link to Local Bootstrap CSS -->
     <link href="/lib/bootstrap/css/bootstrap.css" rel="stylesheet">
+
     <style>
+        /* Minimal custom styles for spinner inside button */
         .btn .spinner-border {
             width: 1em;
             height: 1em;
             border-width: .15em;
-            vertical-align: -0.125em;
+            vertical-align: -0.125em; /* Align with text */
         }
 
-        .member-model-pill, .content-rule-item {
-            display: inline-flex;
-            align-items: center;
-            padding: 0.3em 0.6em;
-            margin: 0.2em;
-            border-radius: 0.25rem;
+        .model-group-card .card-header h5 {
+            color: #0dcaf0;
+        }
+        /* Bootstrap 'info' color for group headers */
+        .moa-fields-section, .contentbased-fields-section {
+            background-color: #f8f9fa; /* Light background for these specific sections */
         }
 
-            .member-model-pill .btn-close, .content-rule-item .btn-close {
-                margin-left: 0.5em;
-                padding: 0.1em; /* Smaller padding for close button */
-                font-size: 0.8em; /* Smaller font for close button */
-            }
-
-        .content-rule-details {
-            font-size: 0.9em;
-            margin-right: 0.5em;
-        }
-
-        .content-rules-table th, .content-rules-table td {
-            vertical-align: middle;
-            font-size: 0.9rem;
-        }
-
-        .form-select-sm, .form-control-sm {
-            font-size: 0.875rem; /* Ensure consistency */
+        .member-model-entry button svg, .content-rule-entry button svg {
+            pointer-events: none; /* Make SVG inside button non-interactive for click */
         }
     </style>
 </head>
 <body>
     <div class="container mt-4 mb-5">
         <div class="d-flex justify-content-between align-items-center mb-3">
-            <h1 class="h3">LLM Proxy Admin</h1>
+            <h1 class="h3">LLM Proxy Management</h1>
             <a href="/log.html" class="btn btn-info">View API Logs</a>
         </div>
 
-        <div id="status-message-container" class="position-fixed top-0 end-0 p-3" style="z-index: 1100"></div>
+        <!-- Container for dynamically generated alerts -->
+        <div id="status-message-container" class="position-fixed top-0 end-0 p-3" style="z-index: 1100">
+            <!-- Alerts will be prepended here by JavaScript -->
+        </div>
 
         <!-- Regular Models Section -->
-        <h2 class="h4">Model Configurations</h2>
-        <div id="config-container" class="mb-4"></div>
-        <div id="add-model-section" class="mt-3 pt-3 border-top">
-            <h3 class="h5">Add New Model</h3>
-            <div class="row g-3 align-items-end">
-                <div class="col-md-6">
-                    <label for="new-model-name" class="form-label">Model Name (e.g., gpt-4o):</label>
-                    <input type="text" id="new-model-name" class="form-control" placeholder="Enter unique model name">
-                </div>
-                <div class="col-md-6">
-                    <button id="add-model-button" class="btn btn-primary w-100" onclick="addEmptyModel()">Add Model Section</button>
+        <div class="mb-5">
+            <h2 class="h4 border-bottom pb-2 mb-3">Model Configurations</h2>
+            <div id="config-container" class="mb-4">
+                <!-- Initial loading state will be set by JavaScript -->
+            </div>
+            <div id="add-model-section" class="mt-4 p-3 border bg-light rounded shadow-sm">
+                <h3 class="h5">Add New Model</h3>
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-6">
+                        <label for="new-model-name" class="form-label">Model Name (e.g., gpt-4o):</label>
+                        <input type="text" id="new-model-name" class="form-control" placeholder="Enter unique model name">
+                    </div>
+                    <div class="col-md-6">
+                        <button id="add-model-button" class="btn btn-primary w-100" onclick="addEmptyModel()">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-cpu-fill me-1" viewBox="0 0 16 16"><path d="M6.5 6a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5z" /><path d="M.5 2A1.5 1.5 0 0 1 2 .5h12A1.5 1.5 0 0 1 15.5 2V4h-2v-.5a.5.5 0 0 0-.5-.5h-2a.5.5 0 0 0-.5.5V4h-1V3.5a.5.5 0 0 0-.5-.5h-2a.5.5 0 0 0-.5.5V4h-1V3.5a.5.5 0 0 0-.5-.5h-2a.5.5 0 0 0-.5.5V4H.5zM4.5 5V2.5h2V5zm3 0V2.5h2V5zm3 0V2.5h2V5zM.5 14A1.5 1.5 0 0 0 2 15.5h12a1.5 1.5 0 0 0 1.5-1.5V6H.5zM4.5 7.5h2V6h-2zm3 0h2V6h-2zm3 0h2V6h-2z" /></svg>
+                            Add Model Section
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
 
         <!-- Model Groups Section -->
-        <div id="model-groups-section" class="mt-5 pt-4 border-top">
-            <h2 class="h4">Model Group Configurations</h2>
+        <div id="model-groups-main-section" class="mt-5 pt-4 border-top">
+            <h2 class="h4 border-bottom pb-2 mb-3">Model Group Configurations</h2>
             <div id="model-groups-container" class="mb-4">
-                <!-- Model groups will be rendered here -->
+                <!-- Model groups will be rendered here by JavaScript -->
             </div>
-            <div class="row g-3 align-items-end">
-                <div class="col-md-6">
-                    <label for="new-group-name" class="form-label">New Group Name:</label>
-                    <input type="text" id="new-group-name" class="form-control" placeholder="Enter unique group name">
-                </div>
-                <div class="col-md-6">
-                    <button id="add-group-button" class="btn btn-info w-100" onclick="addEmptyModelGroup()">Add Model Group Section</button>
+            <div id="add-group-section" class="mt-4 p-3 border bg-light rounded shadow-sm">
+                <h3 class="h5">Add New Model Group</h3>
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-6">
+                        <label for="new-group-name" class="form-label">Group Name (e.g., SmartCoderGroup):</label>
+                        <input type="text" id="new-group-name" class="form-control" placeholder="Enter unique group name">
+                    </div>
+                    <div class="col-md-6">
+                        <button id="add-group-button" class="btn btn-info w-100" onclick="addEmptyModelGroup()">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-collection-fill me-1" viewBox="0 0 16 16"><path d="M0 13a1.5 1.5 0 0 0 1.5 1.5h13A1.5 1.5 0 0 0 16 13V6a1.5 1.5 0 0 0-1.5-1.5h-13A1.5 1.5 0 0 0 0 6v7z" /><path d="M2 3a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 0-1h-11A.5.5 0 0 0 2 3zm2-2a.5.5 0 0 0 .5.5h7a.5.5 0 0 0 0-1h-7A.5.5 0 0 0 4 1z" /></svg>
+                            Add Model Group Section
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Delete Confirmation Modal (reused for models and groups) -->
+    <!-- Generic Delete Confirmation Modal -->
     <div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-labelledby="deleteConfirmModalLabel" aria-hidden="true">
         <div class="modal-dialog">
             <div class="modal-content">
@@ -95,7 +98,7 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    Are you sure you want to delete the configuration for <span id="itemTypeToDelete">model</span>: <strong id="itemNameToDelete"></strong>? This action cannot be undone.
+                    Are you sure you want to delete the configuration for <strong id="itemTypeToDelete"></strong>: <strong id="itemNameToDelete"></strong>? This action cannot be undone.
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -106,704 +109,34 @@
     </div>
 
     <script>
+        // --- Global Variables & Configuration ---
         let configContainer, newModelNameInput, statusMessageContainer;
-        let modelGroupsContainer, newGroupNameInput;
+        let modelGroupsContainer, newGroupNameInput; // For groups
 
-        const modelApiUrl = '/admin/config';
-        const groupApiUrl = '/admin/config/groups';
+        const apiUrl = '/admin/config'; // API endpoint for regular models
+        const groupApiUrl = '/admin/config/groups'; // API endpoint for model groups
 
         let deleteModalInstance = null;
-        let itemPendingDeletion = null; // { name: string, type: 'model' | 'group' }
-        let deleteButtonTrigger = null;
+        let itemPendingDeletion = { name: null, type: null, buttonElement: null }; // type can be 'model' or 'group'
 
-        let allRegularModels = []; // To store names of regular models for dropdowns
+        let currentRegularModelsCache = []; // Cache for regular model names (used by groups)
 
-        // Helper function to show/hide spinner on a button
+        // --- Helper Functions ---
         function toggleButtonSpinner(buttonElement, show) {
             if (!buttonElement) return;
             if (show) {
-                if (!buttonElement.dataset.originalHTML) {
-                    buttonElement.dataset.originalHTML = buttonElement.innerHTML;
-                }
+                if (!buttonElement.dataset.originalHTML) buttonElement.dataset.originalHTML = buttonElement.innerHTML;
                 buttonElement.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Working...`;
                 buttonElement.disabled = true;
             } else {
-                if (buttonElement.dataset.originalHTML) {
-                    buttonElement.innerHTML = buttonElement.dataset.originalHTML;
-                }
+                if (buttonElement.dataset.originalHTML) buttonElement.innerHTML = buttonElement.dataset.originalHTML;
                 buttonElement.disabled = false;
                 delete buttonElement.dataset.originalHTML;
             }
         }
 
-        // --- Data Loading and Rendering ---
-        async function loadConfig() {
-            if (!configContainer || !modelGroupsContainer) {
-                console.error("loadConfig: UI containers not initialized.");
-                return;
-            }
-            configContainer.innerHTML = `<div class="text-center py-3"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading models...</span></div><p class="mt-1">Loading models...</p></div>`;
-            modelGroupsContainer.innerHTML = `<div class="text-center py-3"><div class="spinner-border text-info" role="status"><span class="visually-hidden">Loading groups...</span></div><p class="mt-1">Loading groups...</p></div>`;
-
-            try {
-                // Fetch regular models
-                const modelResponse = await fetch(modelApiUrl);
-                if (!modelResponse.ok) throw new Error(`HTTP error loading models! status: ${modelResponse.status}`);
-                const modelData = await modelResponse.json();
-                allRegularModels = Object.keys(modelData.models || {}).sort(); // Populate for dropdowns
-                renderModels(modelData.models || {});
-
-                // Fetch model groups
-                const groupResponse = await fetch(groupApiUrl);
-                if (!groupResponse.ok) throw new Error(`HTTP error loading groups! status: ${groupResponse.status}`);
-                const groupData = await groupResponse.json(); // Assuming API returns groups directly as an object
-                renderModelGroups(groupData || {}); // groupData might be the dictionary itself
-
-            } catch (error) {
-                console.error('Error loading config:', error);
-                const errorMsg = `<div class="alert alert-danger">Error loading configuration. Details: ${error.message}. Check console.</div>`;
-                if (configContainer.innerHTML.includes("spinner")) configContainer.innerHTML = errorMsg;
-                if (modelGroupsContainer.innerHTML.includes("spinner")) modelGroupsContainer.innerHTML = errorMsg;
-                showStatus(`Error loading configuration: ${error.message}`, true);
-            }
-        }
-
-        function renderModels(models) {
-            configContainer.innerHTML = '';
-            if (Object.keys(models).length === 0) {
-                configContainer.innerHTML = '<div class="alert alert-info">No regular models configured yet.</div>';
-            } else {
-                for (const modelName in models) {
-                    configContainer.appendChild(createModelElement(modelName, models[modelName]));
-                }
-            }
-        }
-
-        function createModelElement(modelName, modelConfig) {
-            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const modelCard = document.createElement('div');
-            modelCard.className = 'card mb-4 shadow-sm';
-            modelCard.id = `model-${sanitizedModelName}`;
-            // ... (rest of createModelElement - same as your original, ensure IDs are unique)
-            // For brevity, I'm assuming your original createModelElement and createBackendElement are here
-            // and they work correctly. The key is that IDs like `save-btn-${sanitizedModelName}` are unique.
-            // Make sure to use `onclick="confirmDeleteItem('${modelName}', 'model', this)"` for delete button
-            const saveButtonId = `save-btn-${sanitizedModelName}`;
-            const deleteButtonId = `delete-btn-${sanitizedModelName}`;
-
-            modelCard.innerHTML = `
-                            <div class="card-header bg-light">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <h5 class="mb-0 text-primary">${modelName}</h5>
-                                    <div>
-                                        <button id="${saveButtonId}" class="btn btn-success btn-sm me-2" onclick="saveModelConfig('${modelName}', this)">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-check-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" /></svg>
-                                            Save Changes
-                                        </button>
-                                        <button id="${deleteButtonId}" class="btn btn-danger btn-sm" onclick="confirmDeleteItem('${modelName}', 'model', this)">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-trash3-fill me-1" viewBox="0 0 16 16"><path d="M11 1.5v1h3.5a.5.5 0 0 1 0 1h-.538l-.853 10.66A2 2 0 0 1 11.115 16h-6.23a2 2 0 0 1-1.994-1.84L2.038 3.5H1.5a.5.5 0 0 1 0-1H5v-1A1.5 1.5 0 0 1 6.5 0h3A1.5 1.5 0 0 1 11 1.5m-5 0v1h4v-1a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5M4.5 5.024l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06m3 0l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06m3 .535l-.5 8.5a.5.5 0 1 0 .998.06l.5-8.5a.5.5 0 1 0-.998.06Z" /></svg>
-                                            Delete Model
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="card-body">
-                                <div class="row mb-3">
-                                    <div class="col-md-4">
-                                        <label for="strategy-${sanitizedModelName}" class="form-label">Routing Strategy:</label>
-                                        <select id="strategy-${sanitizedModelName}" class="form-select form-select-sm">
-                                            <option value="RoundRobin" ${modelConfig.strategy === 'RoundRobin' || modelConfig.strategy === 0 ? 'selected' : ''}>Round Robin</option>
-                                            <option value="Failover" ${modelConfig.strategy === 'Failover' || modelConfig.strategy === 1 ? 'selected' : ''}>Failover</option>
-                                            <option value="Weighted" ${modelConfig.strategy === 'Weighted' || modelConfig.strategy === 2 ? 'selected' : ''}>Weighted</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <h6>Backends:</h6>
-                                <div id="backends-${sanitizedModelName}" class="mb-3 ps-2">
-                                    ${modelConfig.backends.map((backend, index) => createBackendElement(modelName, backend, index)).join('') || '<p class="text-muted fst-italic">No backends added yet for this model.</p>'}
-                                </div>
-                                <button class="btn btn-outline-primary btn-sm" onclick="addBackend('${modelName}')">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8.5 4.5a.5.5 0 0 0-1 0v3h-3a.5.5 0 0 0 0 1h3v3a.5.5 0 0 0 1 0v-3h3a.5.5 0 0 0 0-1h-3z" /></svg>
-                                    Add Backend
-                                </button>
-                            </div>`;
-            return modelCard;
-        }
-        function createBackendElement(modelName, backend, index) {
-            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const backendIdentifier = (backend.name || `new-${index}`).replace(/[^a-zA-Z0-9-_]/g, '');
-            const elementIdPrefix = `backend-${sanitizedModelName}-${backendIdentifier}`; // Unique prefix for this backend's inputs
-
-            return `
-                            <div class="card mb-3 border-light-subtle shadow-sm backend-card" id="${elementIdPrefix}"> <!-- Added backend-card class -->
-                                <div class="card-body p-3">
-                                    <div class="row g-3">
-                                        <div class="col-md-6">
-                                            <label for="name-${elementIdPrefix}" class="form-label">Backend Name:</label>
-                                            <input type="text" id="name-${elementIdPrefix}" class="form-control form-control-sm backend-name" value="${backend.name || ''}" placeholder="Unique name (e.g., OpenAI-EU)">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label for="baseUrl-${elementIdPrefix}" class="form-label">Base URL:</label>
-                                            <input type="text" id="baseUrl-${elementIdPrefix}" class="form-control form-control-sm backend-baseUrl" value="${backend.baseUrl || ''}" placeholder="e.g., https://api.openai.com/v1">
-                                        </div>
-                                        <div class="col-12">
-                                            <label for="apiKeys-${elementIdPrefix}" class="form-label">API Keys (comma-separated):</label>
-                                            <textarea id="apiKeys-${elementIdPrefix}" class="form-control form-control-sm backend-apiKeys" rows="2" placeholder="key1,key2,key3">${backend.apiKeys ? backend.apiKeys.join(',') : ''}</textarea>
-                                        </div>
-                                        <div class="col-md-7">
-                                            <label for="backendModelName-${elementIdPrefix}" class="form-label">Backend-Specific Model Name (Optional):</label>
-                                            <input type="text" id="backendModelName-${elementIdPrefix}" class="form-control form-control-sm backend-backendModelName" value="${backend.backendModelName || ''}" placeholder="Overrides main model name">
-                                        </div>
-                                            <div class="col-md-2">
-                                            <label for="weight-${elementIdPrefix}" class="form-label">Weight:</label>
-                                            <input type="number" id="weight-${elementIdPrefix}" class="form-control form-control-sm backend-weight" value="${backend.weight || 1}" min="1">
-                                        </div>
-                                        <div class="col-md-3 d-flex align-items-end justify-content-between">
-                                            <div class="form-check form-switch pt-1">
-                                                <input class="form-check-input backend-enabled" type="checkbox" role="switch" id="enabled-${elementIdPrefix}" ${backend.enabled !== false ? 'checked' : ''}>
-                                                <label class="form-check-label" for="enabled-${elementIdPrefix}">Enabled</label>
-                                            </div>
-                                            <button class="btn btn-outline-danger btn-sm" onclick="removeBackendElement('${elementIdPrefix}')">
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-dash-circle-fill me-1" viewBox="0 0 16 16">
-                                                    <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M4.5 7.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1z"/>
-                                                </svg>
-                                                Remove
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>`;
-        }
-
-        // --- Model Group Rendering ---
-        function renderModelGroups(groups) {
-            modelGroupsContainer.innerHTML = '';
-            if (Object.keys(groups).length === 0) {
-                modelGroupsContainer.innerHTML = '<div class="alert alert-info">No model groups configured yet.</div>';
-            } else {
-                for (const groupName in groups) {
-                    modelGroupsContainer.appendChild(createModelGroupElement(groupName, groups[groupName]));
-                }
-            }
-        }
-
-        function createModelGroupElement(groupName, groupConfig) {
-            const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const groupCard = document.createElement('div');
-            groupCard.className = 'card mb-4 shadow-sm';
-            groupCard.id = `group-${sanitizedGroupName}`;
-
-            const memberModelsHtml = (groupConfig.models || []).map(modelName =>
-                `<span class="badge bg-secondary member-model-pill" id="member-${sanitizedGroupName}-${modelName.replace(/[^a-zA-Z0-9-_]/g, '')}">
-                                ${modelName}
-                                <button type="button" class="btn-close btn-close-white" aria-label="Remove ${modelName}" onclick="removeMemberModelFromGroupUI('${groupName}', '${modelName}')"></button>
-                            </span>`
-            ).join(' ');
-
-            const regularModelOptions = allRegularModels.map(m => `<option value="${m}">${m}</option>`).join('');
-
-            // Content rules section will be built dynamically
-            const contentBasedSectionId = `content-based-section-${sanitizedGroupName}`;
-            const contentRulesTableId = `content-rules-table-${sanitizedGroupName}`;
-            const defaultContentModelSelectId = `default-content-model-${sanitizedGroupName}`;
-            const addRuleTargetModelSelectId = `add-rule-target-model-${sanitizedGroupName}`;
-
-            groupCard.innerHTML = `
-                            <div class="card-header bg-light">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <h5 class="mb-0 text-info">${groupName}</h5>
-                                    <div>
-                                        <button class="btn btn-success btn-sm me-2" onclick="saveModelGroupConfig('${groupName}', this)">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-check-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" /></svg>
-                                            Save Group
-                                        </button>
-                                        <button class="btn btn-danger btn-sm" onclick="confirmDeleteItem('${groupName}', 'group', this)">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-trash3-fill me-1" viewBox="0 0 16 16"><path d="M11 1.5v1h3.5a.5.5 0 0 1 0 1h-.538l-.853 10.66A2 2 0 0 1 11.115 16h-6.23a2 2 0 0 1-1.994-1.84L2.038 3.5H1.5a.5.5 0 0 1 0-1H5v-1A1.5 1.5 0 0 1 6.5 0h3A1.5 1.5 0 0 1 11 1.5m-5 0v1h4v-1a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5M4.5 5.024l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06m3 0l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06m3 .535l-.5 8.5a.5.5 0 1 0 .998.06l.5-8.5a.5.5 0 1 0-.998.06Z" /></svg>
-                                            Delete Group
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="card-body">
-                                <div class="row mb-3">
-                                    <div class="col-md-4">
-                                        <label for="strategy-group-${sanitizedGroupName}" class="form-label">Routing Strategy:</label>
-                                        <select id="strategy-group-${sanitizedGroupName}" class="form-select form-select-sm group-strategy-select" onchange="toggleContentBasedSectionVisibility('${groupName}')">
-                                            <option value="Failover" ${groupConfig.strategy === 'Failover' || groupConfig.strategy === 0 ? 'selected' : ''}>Failover (Members)</option>
-                                            <option value="RoundRobin" ${groupConfig.strategy === 'RoundRobin' || groupConfig.strategy === 1 ? 'selected' : ''}>Round Robin (Members)</option>
-                                            <option value="Weighted" ${groupConfig.strategy === 'Weighted' || groupConfig.strategy === 2 ? 'selected' : ''}>Weighted (Members - Basic)</option>
-                                            <option value="ContentBased" ${groupConfig.strategy === 'ContentBased' || groupConfig.strategy === 3 ? 'selected' : ''}>Content-Based</option>
-                                        </select>
-                                    </div>
-                                </div>
-
-                                <h6>Member Models:</h6>
-                                <div id="group-members-${sanitizedGroupName}" class="mb-2 d-flex flex-wrap align-items-center">
-                                    ${memberModelsHtml || '<small class="text-muted fst-italic">No member models added.</small>'}
-                                </div>
-                                <div class="input-group input-group-sm mb-3">
-                                    <select id="add-member-model-select-${sanitizedGroupName}" class="form-select">
-                                        <option value="">-- Select a regular model to add --</option>
-                                        ${regularModelOptions}
-                                    </select>
-                                    <button class="btn btn-outline-info" type="button" onclick="addMemberModelToGroupUI('${groupName}')">Add Member</button>
-                                </div>
-
-                                <div id="${contentBasedSectionId}" style="display: ${groupConfig.strategy === 'ContentBased' || groupConfig.strategy === 3 ? 'block' : 'none'};">
-                                    <hr>
-                                    <h6>Content-Based Routing Rules: <small>(Evaluated by Priority - lower first)</small></h6>
-                                    <div id="${contentRulesTableId}" class="mb-3 table-responsive">
-                                        <!-- Content rules table will be rendered here by renderContentRulesForGroup -->
-                                    </div>
-                                    <div class="card card-body bg-light p-3 mb-3">
-                                        <h6 class="h6">Add New Content Rule:</h6>
-                                        <div class="row g-2">
-                                            <div class="col-md-5">
-                                                <label for="add-rule-regex-${sanitizedGroupName}" class="form-label form-label-sm">Regex Pattern:</label>
-                                                <input type="text" id="add-rule-regex-${sanitizedGroupName}" class="form-control form-control-sm" placeholder="e.g., (code|python)">
-                                            </div>
-                                            <div class="col-md-4">
-                                                <label for="${addRuleTargetModelSelectId}" class="form-label form-label-sm">Target Model (from members):</label>
-                                                <select id="${addRuleTargetModelSelectId}" class="form-select form-select-sm">
-                                                    <!-- Options populated by updateGroupMemberDependentSelects -->
-                                                </select>
-                                            </div>
-                                            <div class="col-md-2">
-                                                <label for="add-rule-priority-${sanitizedGroupName}" class="form-label form-label-sm">Priority:</label>
-                                                <input type="number" id="add-rule-priority-${sanitizedGroupName}" class="form-control form-control-sm" value="0" min="0">
-                                            </div>
-                                            <div class="col-md-1 d-flex align-items-end">
-                                                <button class="btn btn-info btn-sm w-100" type="button" onclick="addContentRuleToGroupUI('${groupName}')">Add</button>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div class="row">
-                                        <div class="col-md-6">
-                                            <label for="${defaultContentModelSelectId}" class="form-label">Default Model (if no rule matches):</label>
-                                            <select id="${defaultContentModelSelectId}" class="form-select form-select-sm">
-                                                <option value="">-- None (Fallback to Group's Failover) --</option>
-                                                <!-- Options populated by updateGroupMemberDependentSelects -->
-                                            </select>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        `;
-            // After innerHTML is set, render content rules and update selects
-            // Need a slight delay or ensure elements are in DOM before calling these
-            setTimeout(() => {
-                renderContentRulesForGroup(groupName, groupConfig.contentRules || []);
-                updateGroupMemberDependentSelects(groupName, groupConfig.models || [], groupConfig.defaultModelForContentBased);
-                // Set selected value for default model
-                const defaultModelSelect = document.getElementById(defaultContentModelSelectId);
-                if (defaultModelSelect && groupConfig.defaultModelForContentBased) {
-                    defaultModelSelect.value = groupConfig.defaultModelForContentBased;
-                }
-            }, 0);
-            return groupCard;
-        }
-
-        function renderContentRulesForGroup(groupName, rules) {
-            const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const tableContainerId = `content-rules-table-${sanitizedGroupName}`;
-            const container = document.getElementById(tableContainerId);
-            if (!container) return;
-
-            if (!rules || rules.length === 0) {
-                container.innerHTML = '<p class="text-muted fst-italic">No content rules defined.</p>';
-                return;
-            }
-
-            let tableHtml = `
-                            <table class="table table-sm table-bordered table-hover content-rules-table">
-                                <thead><tr><th>Priority</th><th>Regex Pattern</th><th>Target Model</th><th>Action</th></tr></thead>
-                                <tbody>`;
-            rules.sort((a, b) => (a.priority || 0) - (b.priority || 0)).forEach((rule, index) => {
-                tableHtml += `
-                                <tr id="rule-${sanitizedGroupName}-${index}">
-                                    <td>${rule.priority !== undefined ? rule.priority : 0}</td>
-                                    <td><small>${rule.regexPattern || 'N/A'}</small></td>
-                                    <td>${rule.targetModelName || 'N/A'}</td>
-                                    <td><button class="btn btn-danger btn-sm py-0 px-1" onclick="removeContentRuleFromGroupUI('${groupName}', ${index})">×</button></td>
-                                </tr>`;
-            });
-            tableHtml += `</tbody></table>`;
-            container.innerHTML = tableHtml;
-        }
-
-        function updateGroupMemberDependentSelects(groupName, memberModels = [], currentDefaultModel = null) {
-            const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const targetModelSelect = document.getElementById(`add-rule-target-model-${sanitizedGroupName}`);
-            const defaultModelSelect = document.getElementById(`default-content-model-${sanitizedGroupName}`);
-
-            const optionsHtml = memberModels.map(m => `<option value="${m}">${m}</option>`).join('');
-
-            if (targetModelSelect) {
-                targetModelSelect.innerHTML = memberModels.length > 0 ? optionsHtml : '<option value="">No members</option>';
-            }
-            if (defaultModelSelect) {
-                defaultModelSelect.innerHTML = `<option value="">-- None (Fallback to Group's Failover) --</option>` + optionsHtml;
-                if (currentDefaultModel && memberModels.includes(currentDefaultModel)) {
-                    defaultModelSelect.value = currentDefaultModel;
-                } else {
-                    defaultModelSelect.value = ""; // Reset if current default is no longer a member or invalid
-                }
-            }
-        }
-
-        // --- UI Actions (Models) ---
-        function addEmptyModel() {
-            if (!newModelNameInput || !configContainer) return;
-            const modelName = newModelNameInput.value.trim();
-            if (!modelName) { showStatus("Please enter a model name.", true); newModelNameInput.focus(); return; }
-            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
-            if (document.getElementById(`model-${sanitizedModelName}`)) {
-                showStatus(`Model "<b>${modelName}</b>" already exists.`, true); return;
-            }
-            const noModelsAlert = configContainer.querySelector('.alert-info');
-            if (noModelsAlert) noModelsAlert.remove();
-
-            const newModelConfig = { strategy: 'Failover', backends: [] };
-            configContainer.appendChild(createModelElement(modelName, newModelConfig));
-            newModelNameInput.value = '';
-            showStatus(`Added section for model "<b>${modelName}</b>". Add backends and Save.`, false);
-        }
-        function addBackend(modelName) {
-            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const backendsDiv = document.getElementById(`backends-${sanitizedModelName}`);
-            if (!backendsDiv) return;
-            const placeholder = backendsDiv.querySelector('p.text-muted');
-            if (placeholder) placeholder.remove();
-
-            const existingBackends = backendsDiv.querySelectorAll('.backend-card'); // Use the class
-            const newIndex = existingBackends.length;
-            const newBackend = { name: '', baseUrl: '', apiKeys: [], backendModelName: null, weight: 1, enabled: true };
-            backendsDiv.insertAdjacentHTML('beforeend', createBackendElement(modelName, newBackend, newIndex));
-        }
-        function removeBackendElement(backendElementId) {
-            const backendElement = document.getElementById(backendElementId);
-            if (backendElement) {
-                const parentBackendsDiv = backendElement.parentElement;
-                backendElement.remove();
-                if (parentBackendsDiv && parentBackendsDiv.querySelectorAll('.backend-card').length === 0) {
-                    parentBackendsDiv.innerHTML = '<p class="text-muted fst-italic">No backends added yet for this model.</p>';
-                }
-            }
-        }
-
-        // --- UI Actions (Model Groups) ---
-        function addEmptyModelGroup() {
-            if (!newGroupNameInput || !modelGroupsContainer) return;
-            const groupName = newGroupNameInput.value.trim();
-            if (!groupName) { showStatus("Please enter a group name.", true); newGroupNameInput.focus(); return; }
-            const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            if (document.getElementById(`group-${sanitizedGroupName}`)) {
-                showStatus(`Group "<b>${groupName}</b>" already exists.`, true); return;
-            }
-            const noGroupsAlert = modelGroupsContainer.querySelector('.alert-info');
-            if (noGroupsAlert) noGroupsAlert.remove();
-
-            const newGroupConfig = { strategy: 'Failover', models: [], contentRules: [], defaultModelForContentBased: null };
-            modelGroupsContainer.appendChild(createModelGroupElement(groupName, newGroupConfig));
-            newGroupNameInput.value = '';
-            showStatus(`Added section for group "<b>${groupName}</b>". Add members and Save.`, false);
-        }
-
-        function addMemberModelToGroupUI(groupName) {
-            const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const selectElement = document.getElementById(`add-member-model-select-${sanitizedGroupName}`);
-            const membersContainer = document.getElementById(`group-members-${sanitizedGroupName}`);
-            if (!selectElement || !membersContainer) return;
-
-            const modelToAdd = selectElement.value;
-            if (!modelToAdd) { showStatus("Please select a model to add.", true); return; }
-
-            // Check if already a member (by checking for existing pill)
-            if (document.getElementById(`member-${sanitizedGroupName}-${modelToAdd.replace(/[^a-zA-Z0-9-_]/g, '')}`)) {
-                showStatus(`Model "<b>${modelToAdd}</b>" is already a member of group "<b>${groupName}</b>".`, true);
-                return;
-            }
-
-            const noMembersP = membersContainer.querySelector('small.text-muted');
-            if (noMembersP) noMembersP.remove();
-
-            const pillHtml = `<span class="badge bg-secondary member-model-pill" id="member-${sanitizedGroupName}-${modelToAdd.replace(/[^a-zA-Z0-9-_]/g, '')}">
-                                            ${modelToAdd}
-                                            <button type="button" class="btn-close btn-close-white" aria-label="Remove ${modelToAdd}" onclick="removeMemberModelFromGroupUI('${groupName}', '${modelToAdd}')"></button>
-                                        </span>`;
-            membersContainer.insertAdjacentHTML('beforeend', pillHtml + ' ');
-            selectElement.value = ''; // Reset select
-
-            // Update dependent selects for content rules
-            const groupCard = document.getElementById(`group-${sanitizedGroupName}`);
-            const currentMembers = Array.from(groupCard.querySelectorAll('.member-model-pill')).map(pill => pill.textContent.trim().split('\n')[0].trim());
-            updateGroupMemberDependentSelects(groupName, currentMembers);
-        }
-
-        function removeMemberModelFromGroupUI(groupName, modelToRemove) {
-            const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const pillId = `member-${sanitizedGroupName}-${modelToRemove.replace(/[^a-zA-Z0-9-_]/g, '')}`;
-            const pillElement = document.getElementById(pillId);
-            if (pillElement) pillElement.remove();
-
-            const membersContainer = document.getElementById(`group-members-${sanitizedGroupName}`);
-            if (membersContainer && membersContainer.querySelectorAll('.member-model-pill').length === 0) {
-                membersContainer.innerHTML = '<small class="text-muted fst-italic">No member models added.</small>';
-            }
-            // Update dependent selects for content rules
-            const groupCard = document.getElementById(`group-${sanitizedGroupName}`);
-            const currentMembers = Array.from(groupCard.querySelectorAll('.member-model-pill')).map(pill => pill.textContent.trim().split('\n')[0].trim());
-            updateGroupMemberDependentSelects(groupName, currentMembers);
-        }
-
-        function addContentRuleToGroupUI(groupName) {
-            const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const regexInput = document.getElementById(`add-rule-regex-${sanitizedGroupName}`);
-            const targetModelSelect = document.getElementById(`add-rule-target-model-${sanitizedGroupName}`);
-            const priorityInput = document.getElementById(`add-rule-priority-${sanitizedGroupName}`);
-
-            if (!regexInput || !targetModelSelect || !priorityInput) return;
-
-            const regexPattern = regexInput.value.trim();
-            const targetModelName = targetModelSelect.value;
-            const priority = parseInt(priorityInput.value, 10);
-
-            if (!regexPattern) { showStatus("Regex pattern is required for content rule.", true); regexInput.focus(); return; }
-            if (!targetModelName) { showStatus("Target model is required for content rule.", true); targetModelSelect.focus(); return; }
-            if (isNaN(priority) || priority < 0) { showStatus("Priority must be a non-negative number.", true); priorityInput.focus(); return; }
-
-            // This is a simplified way to manage rules in UI. For saving, we'll read all rules.
-            // Here, we just re-render the rules table with the new (unsaved) rule.
-            // A more robust approach would be to store rules in a JS array associated with the group card.
-            const groupCard = document.getElementById(`group-${sanitizedGroupName}`);
-            // For simplicity, we'll extract all rules when saving. Here, just visually add and re-render.
-            // This part is tricky without a temporary JS model. Let's assume we re-read all rules on save.
-            // For now, just show a message and tell user to save.
-            // A better way: get current rules from DOM, add new one, then re-render.
-            const currentRules = []; // Placeholder: In a real app, you'd manage this better.
-            const rulesContainer = document.getElementById(`content-rules-table-${sanitizedGroupName}`);
-            const ruleElements = rulesContainer.querySelectorAll('tbody tr');
-            ruleElements.forEach(row => {
-                currentRules.push({
-                    priority: parseInt(row.cells[0].textContent),
-                    regexPattern: row.cells[1].textContent,
-                    targetModelName: row.cells[2].textContent
-                });
-            });
-            currentRules.push({ regexPattern, targetModelName, priority });
-            renderContentRulesForGroup(groupName, currentRules);
-
-            regexInput.value = '';
-            // targetModelSelect.value = ''; // Keep selected if user wants to add multiple for same target
-            priorityInput.value = '0';
-            showStatus("Content rule added to UI. Remember to Save Group.", false, 2000);
-        }
-
-        function removeContentRuleFromGroupUI(groupName, ruleIndexToRemove) {
-            // This also requires re-reading rules from DOM, removing one, and re-rendering.
-            // For simplicity, we'll rely on the save function to gather all current rules.
-            // This function will just remove it visually for now.
-            const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const ruleRow = document.getElementById(`rule-${sanitizedGroupName}-${ruleIndexToRemove}`);
-            if (ruleRow) ruleRow.remove();
-
-            const rulesContainer = document.getElementById(`content-rules-table-${sanitizedGroupName}`);
-            if (rulesContainer.querySelectorAll('tbody tr').length === 0) {
-                rulesContainer.innerHTML = '<p class="text-muted fst-italic">No content rules defined.</p>';
-            }
-            showStatus("Content rule removed from UI. Remember to Save Group.", false, 2000);
-        }
-
-        function toggleContentBasedSectionVisibility(groupName) {
-            const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const strategySelect = document.getElementById(`strategy-group-${sanitizedGroupName}`);
-            const contentBasedSection = document.getElementById(`content-based-section-${sanitizedGroupName}`);
-            if (strategySelect && contentBasedSection) {
-                contentBasedSection.style.display = (strategySelect.value === 'ContentBased' || strategySelect.value === '3') ? 'block' : 'none';
-            }
-        }
-
-        // --- API Interaction (Models) ---
-        async function saveModelConfig(modelName, buttonElement) {
-            toggleButtonSpinner(buttonElement, true);
-            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const modelDiv = document.getElementById(`model-${sanitizedModelName}`);
-            if (!modelDiv) { toggleButtonSpinner(buttonElement, false); showStatus(`Error: Model element for ${modelName} not found.`, true); return; }
-
-            const strategy = modelDiv.querySelector(`#strategy-${sanitizedModelName}`).value;
-            const backendElementsContainer = modelDiv.querySelector(`#backends-${sanitizedModelName}`);
-            const backendElements = backendElementsContainer.querySelectorAll('.backend-card'); // Use class
-            const backends = [];
-            let hasValidationError = false;
-
-            backendElements.forEach((be, index) => {
-                if (hasValidationError) return;
-                const name = be.querySelector('.backend-name').value.trim();
-                const baseUrl = be.querySelector('.backend-baseUrl').value.trim();
-                const apiKeysRaw = be.querySelector('.backend-apiKeys').value.trim();
-                const backendModelName = be.querySelector('.backend-backendModelName').value.trim() || null;
-                const weight = parseInt(be.querySelector('.backend-weight').value, 10);
-                const enabled = be.querySelector('.backend-enabled').checked;
-
-                if (!name) { showStatus(`Error: Backend Name is required for backend #${index + 1} in model <b>${modelName}</b>.`, true); hasValidationError = true; return; }
-                if (!baseUrl) { showStatus(`Error: Base URL is required for backend "<b>${name}</b>" in model <b>${modelName}</b>.`, true); hasValidationError = true; return; }
-                const apiKeys = apiKeysRaw ? apiKeysRaw.split(',').map(k => k.trim()).filter(k => k) : [];
-                backends.push({ name, baseUrl, apiKeys, backendModelName, weight: isNaN(weight) || weight < 1 ? 1 : weight, enabled });
-            });
-
-            if (hasValidationError) { toggleButtonSpinner(buttonElement, false); return; }
-            const payload = { strategy, backends };
-
-            try {
-                const response = await fetch(`${modelApiUrl}/${encodeURIComponent(modelName)}`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-                });
-                const responseText = await response.text();
-                if (!response.ok) {
-                    let errorMessage = responseText; try { const errorJson = JSON.parse(responseText); errorMessage = errorJson.detail || errorJson.title || errorJson.error || JSON.stringify(errorJson); } catch (e) { /* use raw text */ }
-                    throw new Error(`HTTP error! status: ${response.status} - ${errorMessage}`);
-                }
-                showStatus(`Successfully saved configuration for model <b>${modelName}</b>.`, false);
-            } catch (error) {
-                console.error(`Error saving config for ${modelName}:`, error);
-                showStatus(`Error saving config for <b>${modelName}</b>: ${error.message || 'Unknown error'}`, true);
-            } finally {
-                toggleButtonSpinner(buttonElement, false);
-            }
-        }
-
-        // --- API Interaction (Model Groups) ---
-        async function saveModelGroupConfig(groupName, buttonElement) {
-            toggleButtonSpinner(buttonElement, true);
-            const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const groupDiv = document.getElementById(`group-${sanitizedGroupName}`);
-            if (!groupDiv) { toggleButtonSpinner(buttonElement, false); showStatus(`Error: Group element for ${groupName} not found.`, true); return; }
-
-            const strategy = groupDiv.querySelector(`#strategy-group-${sanitizedGroupName}`).value;
-
-            const memberPills = groupDiv.querySelectorAll(`#group-members-${sanitizedGroupName} .member-model-pill`);
-            const memberModels = Array.from(memberPills).map(pill => pill.textContent.trim().split('\n')[0].trim()); // Get text before close button
-
-            let contentRules = [];
-            let defaultModelForContentBased = null;
-
-            if (strategy === 'ContentBased' || strategy === '3') { // Check for string or number from enum
-                const rulesTableBody = groupDiv.querySelector(`#content-rules-table-${sanitizedGroupName} tbody`);
-                if (rulesTableBody) {
-                    rulesTableBody.querySelectorAll('tr').forEach(row => {
-                        contentRules.push({
-                            priority: parseInt(row.cells[0].textContent, 10),
-                            regexPattern: row.cells[1].textContent,
-                            targetModelName: row.cells[2].textContent
-                        });
-                    });
-                }
-                defaultModelForContentBased = groupDiv.querySelector(`#default-content-model-${sanitizedGroupName}`).value || null;
-                if (defaultModelForContentBased === "") defaultModelForContentBased = null;
-            }
-
-            if (memberModels.length === 0) {
-                showStatus(`Error: Group "<b>${groupName}</b>" must have at least one member model.`, true);
-                toggleButtonSpinner(buttonElement, false);
-                return;
-            }
-
-            const payload = { strategy, models: memberModels, contentRules, defaultModelForContentBased };
-
-            try {
-                const response = await fetch(`${groupApiUrl}/${encodeURIComponent(groupName)}`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-                });
-                const responseText = await response.text();
-                if (!response.ok) {
-                    let errorMessage = responseText; try { const errorJson = JSON.parse(responseText); errorMessage = errorJson.detail || errorJson.title || errorJson.error || JSON.stringify(errorJson); } catch (e) { /* use raw text */ }
-                    throw new Error(`HTTP error! status: ${response.status} - ${errorMessage}`);
-                }
-                showStatus(`Successfully saved configuration for group <b>${groupName}</b>.`, false);
-                // Re-render the specific group to reflect saved state accurately (especially for rules if UI was simplified)
-                const updatedGroupConfig = await (await fetch(`${groupApiUrl}/${encodeURIComponent(groupName)}`)).json();
-                const oldCard = document.getElementById(`group-${sanitizedGroupName}`);
-                const newCard = createModelGroupElement(groupName, updatedGroupConfig);
-                if (oldCard) oldCard.replaceWith(newCard);
-
-            } catch (error) {
-                console.error(`Error saving config for group ${groupName}:`, error);
-                showStatus(`Error saving config for group <b>${groupName}</b>: ${error.message || 'Unknown error'}`, true);
-            } finally {
-                toggleButtonSpinner(buttonElement, false);
-            }
-        }
-
-        // --- Deletion (Unified) ---
-        function confirmDeleteItem(name, type, buttonElement) { // type is 'model' or 'group'
-            if (!name) {
-                showStatus("Item name not provided for deletion.", true);
-                return;
-            }
-            itemPendingDeletion = { name, type };
-            deleteButtonTrigger = buttonElement;
-
-            document.getElementById('itemTypeToDelete').textContent = type;
-            document.getElementById('itemNameToDelete').textContent = name;
-
-            const modalElement = document.getElementById('deleteConfirmModal');
-            if (!deleteModalInstance) {
-                deleteModalInstance = new bootstrap.Modal(modalElement);
-            }
-            deleteModalInstance.show();
-        }
-
-        async function performActualDeletion() {
-            if (!itemPendingDeletion || !deleteButtonTrigger) return;
-
-            const { name, type } = itemPendingDeletion;
-            const buttonElement = deleteButtonTrigger;
-
-            if (deleteModalInstance) deleteModalInstance.hide();
-            toggleButtonSpinner(buttonElement, true);
-
-            const sanitizedName = name.replace(/[^a-zA-Z0-9-_]/g, '');
-            const apiUrl = type === 'model' ? modelApiUrl : groupApiUrl;
-            const elementIdPrefix = type === 'model' ? 'model' : 'group';
-
-            try {
-                const response = await fetch(`${apiUrl}/${encodeURIComponent(name)}`, { method: 'DELETE' });
-                const responseText = await response.text();
-                if (!response.ok) {
-                    let errorMessage = responseText; try { const errorJson = JSON.parse(responseText); errorMessage = errorJson.detail || errorJson.title || errorJson.error || JSON.stringify(errorJson); } catch (e) { /* use raw text */ }
-                    throw new Error(`HTTP error! status: ${response.status} - ${errorMessage}`);
-                }
-                showStatus(`Successfully deleted ${type} "<b>${name}</b>".`, false);
-                document.getElementById(`${elementIdPrefix}-${sanitizedName}`)?.remove();
-
-                const container = type === 'model' ? configContainer : modelGroupsContainer;
-                if (container && (container.children.length === 0 || (container.children.length === 1 && container.firstElementChild.classList.contains('alert')))) {
-                    container.innerHTML = `<div class="alert alert-info">No ${type}s configured yet.</div>`;
-                }
-                if (type === 'model') { // If a model was deleted, refresh allRegularModels and potentially update group dropdowns
-                    allRegularModels = allRegularModels.filter(m => m !== name);
-                    // This is a bit heavy, but ensures consistency. Could be optimized.
-                    const groups = modelGroupsContainer.querySelectorAll('.card');
-                    groups.forEach(groupCard => {
-                        const groupName = groupCard.id.substring('group-'.length); // Extract group name
-                        const currentMembers = Array.from(groupCard.querySelectorAll('.member-model-pill')).map(pill => pill.textContent.trim().split('\n')[0].trim());
-                        updateGroupMemberDependentSelects(groupName, currentMembers); // Re-populates selects in content rules
-                    });
-                }
-
-            } catch (error) {
-                console.error(`Error deleting ${type} ${name}:`, error);
-                showStatus(`Error deleting ${type} "<b>${name}</b>": ${error.message || 'Unknown error'}`, true);
-            } finally {
-                toggleButtonSpinner(buttonElement, false);
-                itemPendingDeletion = null;
-                deleteButtonTrigger = null;
-            }
-        }
-
-        function showStatus(message, isError = false, duration = 5000) {
-            if (!statusMessageContainer) { console.error("showStatus: statusMessageContainer not initialized."); return; }
+        function showStatus(message, isError = false) {
+            if (!statusMessageContainer) { console.error("statusMessageContainer not initialized."); return; }
             const alertDiv = document.createElement('div');
             alertDiv.className = `alert ${isError ? 'alert-danger' : 'alert-success'} alert-dismissible fade show m-0 mb-2 shadow-sm`;
             alertDiv.setAttribute('role', 'alert');
@@ -811,32 +144,438 @@
             statusMessageContainer.prepend(alertDiv);
             setTimeout(() => {
                 const bsAlert = bootstrap.Alert.getInstance(alertDiv);
-                if (bsAlert) { bsAlert.close(); }
-                else if (alertDiv.parentElement) { alertDiv.remove(); } // Fallback remove
-            }, duration);
+                if (bsAlert) bsAlert.close();
+                else if (alertDiv.parentElement) alertDiv.remove();
+            }, isError ? 8000 : 5000); // Longer display for errors
+        }
+
+        function getAllDefinedModelNames() {
+            return currentRegularModelsCache;
+        }
+
+        // --- Data Loading and Rendering (Models & Groups) ---
+        async function loadConfig() {
+            if (configContainer) {
+                configContainer.innerHTML = `<div class="text-center py-5"><div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;"><span class="visually-hidden">Loading...</span></div><p class="mt-2 lead">Loading model configurations...</p></div>`;
+            }
+            if (modelGroupsContainer) {
+                modelGroupsContainer.innerHTML = `<div class="text-center py-5"><div class="spinner-border text-info" role="status" style="width: 3rem; height: 3rem;"><span class="visually-hidden">Loading...</span></div><p class="mt-2 lead">Loading group configurations...</p></div>`;
+            }
+
+            try {
+                // Load Regular Models
+                const modelResponse = await fetch(apiUrl);
+                if (!modelResponse.ok) throw new Error(`HTTP error loading models! status: ${modelResponse.status} - ${await modelResponse.text()}`);
+                const modelData = await modelResponse.json();
+                currentRegularModelsCache = Object.keys(modelData.models || {}); // Populate cache
+                renderConfig(modelData.models || {});
+
+                // Load Model Groups
+                const groupResponse = await fetch(groupApiUrl);
+                if (!groupResponse.ok) throw new Error(`HTTP error loading groups! status: ${groupResponse.status} - ${await groupResponse.text()}`);
+                const groupData = await groupResponse.json(); // Expects dictionary directly
+                renderModelGroups(groupData || {});
+
+            } catch (error) {
+                console.error('Error loading configurations:', error);
+                const errorMsg = `Error loading configurations. Details: ${error.message}. Check console.`;
+                if (configContainer) configContainer.innerHTML = `<div class="alert alert-danger">${errorMsg}</div>`;
+                if (modelGroupsContainer) modelGroupsContainer.innerHTML = `<div class="alert alert-danger">${errorMsg}</div>`;
+                showStatus(errorMsg, true);
+            }
+        }
+
+        // --- Regular Model UI Functions ---
+        function renderConfig(models) { // Renders regular models
+            if (!configContainer) return;
+            configContainer.innerHTML = '';
+            if (Object.keys(models).length === 0) {
+                configContainer.innerHTML = '<div class="alert alert-info">No models configured yet. Use the form below to add one.</div>';
+            } else {
+                for (const modelName in models) {
+                    const modelCard = createModelElement(modelName, models[modelName]);
+                    configContainer.appendChild(modelCard);
+                    const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+                    const strategySelect = modelCard.querySelector(`#strategy-${sanitizedModelName}`);
+                    if (strategySelect) {
+                        strategySelect.addEventListener('change', function () {
+                            toggleWeightInputs(modelCard, this.value === 'Weighted');
+                        });
+                        toggleWeightInputs(modelCard, strategySelect.value === 'Weighted'); // Initial call
+                    }
+                }
+            }
+        }
+
+        function createModelElement(modelName, modelConfig) {
+            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+            const modelCard = document.createElement('div');
+            modelCard.className = 'card mb-4 shadow-sm model-card';
+            modelCard.id = `model-${sanitizedModelName}`;
+            const saveButtonId = `save-btn-${sanitizedModelName}`;
+            const deleteButtonId = `delete-btn-${sanitizedModelName}`;
+
+            modelCard.innerHTML = `
+                        <div class="card-header bg-light">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0 text-primary">${modelName}</h5>
+                                <div>
+                                    <button id="${saveButtonId}" class="btn btn-success btn-sm me-2" onclick="saveModelConfig('${modelName}', this)">Save Changes</button>
+                                    <button id="${deleteButtonId}" class="btn btn-danger btn-sm" onclick="confirmDeleteItem('model', '${modelName}', this)">Delete Model</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="row mb-3">
+                                <div class="col-md-4">
+                                    <label for="strategy-${sanitizedModelName}" class="form-label">Routing Strategy:</label>
+                                    <select id="strategy-${sanitizedModelName}" class="form-select form-select-sm">
+                                        <option value="Failover" ${modelConfig.strategy === 'Failover' ? 'selected' : ''}>Failover</option>
+                                        <option value="RoundRobin" ${modelConfig.strategy === 'RoundRobin' ? 'selected' : ''}>Round Robin</option>
+                                        <option value="Weighted" ${modelConfig.strategy === 'Weighted' ? 'selected' : ''}>Weighted</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <h6>Backends:</h6>
+                            <div id="backends-${sanitizedModelName}" class="mb-3 ps-2">
+                                ${(modelConfig.backends && modelConfig.backends.length > 0) ? modelConfig.backends.map((backend, index) => createBackendElement(modelName, backend, index)).join('') : '<p class="text-muted fst-italic">No backends added yet.</p>'}
+                            </div>
+                            <button class="btn btn-outline-primary btn-sm" onclick="addBackend('${modelName}')">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8.5 4.5a.5.5 0 0 0-1 0v3h-3a.5.5 0 0 0 0 1h3v3a.5.5 0 0 0 1 0v-3h3a.5.5 0 0 0 0-1h-3z" /></svg>
+                                Add Backend
+                            </button>
+                        </div>`;
+            return modelCard;
+        }
+
+        function createBackendElement(modelName, backend, index) {
+            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+            const backendIdentifier = (backend.name || `new-${index}`).replace(/[^a-zA-Z0-9-_]/g, '');
+            const elementIdPrefix = `backend-${sanitizedModelName}-${backendIdentifier}`;
+            const modelCardElement = document.getElementById(`model-${sanitizedModelName}`);
+            const isWeightedStrategy = modelCardElement?.querySelector(`#strategy-${sanitizedModelName}`)?.value === 'Weighted';
+
+            return `
+                        <div class="card mb-3 border-light-subtle shadow-sm backend-card" id="${elementIdPrefix}">
+                            <div class="card-body p-3">
+                                <div class="row g-3">
+                                    <div class="col-md-6"><label for="name-${elementIdPrefix}" class="form-label">Backend Name:</label><input type="text" id="name-${elementIdPrefix}" class="form-control form-control-sm backend-name" value="${backend.name || ''}" placeholder="Unique name"></div>
+                                    <div class="col-md-6"><label for="baseUrl-${elementIdPrefix}" class="form-label">Base URL:</label><input type="text" id="baseUrl-${elementIdPrefix}" class="form-control form-control-sm backend-baseUrl" value="${backend.baseUrl || ''}" placeholder="e.g., https://api.openai.com/v1"></div>
+                                    <div class="col-12"><label for="apiKeys-${elementIdPrefix}" class="form-label">API Keys (comma-separated):</label><textarea id="apiKeys-${elementIdPrefix}" class="form-control form-control-sm backend-apiKeys" rows="2" placeholder="key1,key2">${backend.apiKeys ? backend.apiKeys.join(',') : ''}</textarea></div>
+                                    <div class="col-md-7"><label for="backendModelName-${elementIdPrefix}" class="form-label">Backend-Specific Model Name (Opt.):</label><input type="text" id="backendModelName-${elementIdPrefix}" class="form-control form-control-sm backend-backendModelName" value="${backend.backendModelName || ''}" placeholder="Overrides main model name"></div>
+                                    <div class="col-md-2"><label for="weight-${elementIdPrefix}" class="form-label">Weight:</label><input type="number" id="weight-${elementIdPrefix}" class="form-control form-control-sm backend-weight" value="${backend.weight || 1}" min="1" ${!isWeightedStrategy ? 'disabled' : ''}></div>
+                                    <div class="col-md-3 d-flex align-items-end justify-content-between">
+                                        <div class="form-check form-switch pt-1"><input class="form-check-input backend-enabled" type="checkbox" role="switch" id="enabled-${elementIdPrefix}" ${backend.enabled !== false ? 'checked' : ''}><label class="form-check-label" for="enabled-${elementIdPrefix}">Enabled</label></div>
+                                        <button class="btn btn-outline-danger btn-sm" onclick="removeBackendElement('${elementIdPrefix}')"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-dash-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M4.5 7.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1z" /></svg>Remove</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>`;
+        }
+
+        function addEmptyModel() {
+            if (!newModelNameInput || !configContainer) return;
+            const modelName = newModelNameInput.value.trim();
+            if (!modelName) { showStatus("Please enter a model name.", true); newModelNameInput.focus(); return; }
+            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+            if (document.getElementById(`model-${sanitizedModelName}`)) { showStatus(`Model "<b>${modelName}</b>" already exists.`, true); return; }
+            const noModelsAlert = configContainer.querySelector('.alert-info');
+            if (noModelsAlert) noModelsAlert.remove();
+            const newModelConfig = { strategy: 'Failover', backends: [] };
+            const modelCard = createModelElement(modelName, newModelConfig);
+            configContainer.appendChild(modelCard);
+            const strategySelect = modelCard.querySelector(`#strategy-${sanitizedModelName}`); // Attach listener for new card
+            if (strategySelect) {
+                strategySelect.addEventListener('change', function () { toggleWeightInputs(modelCard, this.value === 'Weighted'); });
+                toggleWeightInputs(modelCard, strategySelect.value === 'Weighted'); // Initial call
+            }
+            newModelNameInput.value = '';
+            showStatus(`Added section for model "<b>${modelName}</b>". Add backends and Save.`, false);
+        }
+
+        function addBackend(modelName) {
+            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+            const backendsDiv = document.getElementById(`backends-${sanitizedModelName}`);
+            if (!backendsDiv) return;
+            const placeholder = backendsDiv.querySelector('p.text-muted');
+            if (placeholder) placeholder.remove();
+            const newIndex = backendsDiv.querySelectorAll('.backend-card').length;
+            const newBackend = { name: '', baseUrl: '', apiKeys: [], backendModelName: null, weight: 1, enabled: true };
+            backendsDiv.insertAdjacentHTML('beforeend', createBackendElement(modelName, newBackend, newIndex));
+        }
+
+        function removeBackendElement(backendElementId) {
+            const backendElement = document.getElementById(backendElementId);
+            if (backendElement) {
+                const parentBackendsDiv = backendElement.parentElement;
+                backendElement.remove();
+                if (parentBackendsDiv && parentBackendsDiv.querySelectorAll('.backend-card').length === 0) {
+                    parentBackendsDiv.innerHTML = '<p class="text-muted fst-italic">No backends added yet.</p>';
+                }
+            }
+        }
+
+        function toggleWeightInputs(modelCardElement, isWeighted) {
+            const weightInputs = modelCardElement.querySelectorAll('.backend-weight');
+            weightInputs.forEach(input => { input.disabled = !isWeighted; });
+        }
+
+        async function saveModelConfig(modelName, buttonElement) {
+            toggleButtonSpinner(buttonElement, true);
+            const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+            const modelDiv = document.getElementById(`model-${sanitizedModelName}`);
+            if (!modelDiv) { /* ... error ... */ toggleButtonSpinner(buttonElement, false); return; }
+
+            const strategy = modelDiv.querySelector(`#strategy-${sanitizedModelName}`).value;
+            const backendElements = modelDiv.querySelectorAll(`#backends-${sanitizedModelName} .backend-card`);
+            const backends = []; let hasValidationError = false;
+
+            backendElements.forEach((be, index) => {
+                if (hasValidationError) return;
+                const name = be.querySelector('.backend-name').value.trim();
+                const baseUrl = be.querySelector('.backend-baseUrl').value.trim();
+                const apiKeysRaw = be.querySelector('.backend-apiKeys').value.trim();
+                const backendModelNameVal = be.querySelector('.backend-backendModelName').value.trim() || null;
+                const weight = parseInt(be.querySelector('.backend-weight').value, 10);
+                const enabled = be.querySelector('.backend-enabled').checked;
+                if (!name || !baseUrl) { showStatus(`Backend Name and Base URL are required for backend #${index + 1} in model <b>${modelName}</b>.`, true); hasValidationError = true; return; }
+                backends.push({ name, baseUrl, apiKeys: apiKeysRaw ? apiKeysRaw.split(',').map(k => k.trim()).filter(k => k) : [], backendModelName: backendModelNameVal, weight: isNaN(weight) || weight < 1 ? 1 : weight, enabled });
+            });
+
+            if (hasValidationError) { toggleButtonSpinner(buttonElement, false); return; }
+            const payload = { strategy, backends };
+
+            try {
+                const response = await fetch(`${apiUrl}/${encodeURIComponent(modelName)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const responseText = await response.text();
+                if (!response.ok) { let err = responseText; try { const ej = JSON.parse(responseText); err = ej.detail || ej.title || ej.error || JSON.stringify(ej); } catch (e) { } throw new Error(`HTTP ${response.status}: ${err}`); }
+                showStatus(`Successfully saved config for model <b>${modelName}</b>.`, false);
+            } catch (error) { showStatus(`Error saving model <b>${modelName}</b>: ${error.message}`, true); }
+            finally { toggleButtonSpinner(buttonElement, false); }
+        }
+
+        // --- Model Group UI Functions ---
+        function renderModelGroups(groups) {
+            if (!modelGroupsContainer) return;
+            modelGroupsContainer.innerHTML = '';
+            if (Object.keys(groups).length === 0) {
+                modelGroupsContainer.innerHTML = '<div class="alert alert-info">No model groups configured yet.</div>';
+            } else {
+                for (const groupName in groups) {
+                    const groupCard = createModelGroupElement(groupName, groups[groupName]);
+                    modelGroupsContainer.appendChild(groupCard);
+                    const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
+                    const strategySelect = groupCard.querySelector(`#strategy-group-${sanitizedGroupName}`);
+                    if (strategySelect) {
+                        toggleGroupStrategyFields(sanitizedGroupName, strategySelect.value);
+                        if (strategySelect.value === 'ContentBased') {
+                            renderContentRules(sanitizedGroupName, groups[groupName].contentRules || []);
+                        }
+                    }
+                }
+            }
+        }
+
+        function createModelGroupElement(groupName, groupConfig) {
+            const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
+            const groupCard = document.createElement('div');
+            groupCard.className = 'card mb-4 shadow-sm model-group-card';
+            groupCard.id = `group-${sanitizedGroupName}`;
+
+            const allModelNames = getAllDefinedModelNames();
+            const strategyOpts = `
+                        <option value="Failover" ${groupConfig.strategy === 'Failover' ? 'selected' : ''}>Failover</option>
+                        <option value="RoundRobin" ${groupConfig.strategy === 'RoundRobin' ? 'selected' : ''}>Round Robin</option>
+                        <option value="Weighted" ${groupConfig.strategy === 'Weighted' ? 'selected' : ''}>Weighted (Members)</option>
+                        <option value="ContentBased" ${groupConfig.strategy === 'ContentBased' ? 'selected' : ''}>Content Based</option>
+                        <option value="MixtureOfAgents" ${groupConfig.strategy === 'MixtureOfAgents' ? 'selected' : ''}>Mixture of Agents</option>`;
+            let membersHtml = '<p class="text-muted fst-italic small">No member/agent models.</p>';
+            if (groupConfig.models && groupConfig.models.length > 0) {
+                membersHtml = groupConfig.models.map(mId => `<div class="d-flex justify-content-between align-items-center mb-1 p-1 border rounded member-model-entry"><span>${mId}</span><button class="btn btn-outline-danger btn-sm py-0 px-1" onclick="removeMemberModelFromGroupUI('${sanitizedGroupName}', '${mId}', this)"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-x-circle" viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z" /><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z" /></svg></button></div>`).join('');
+            }
+            let orchOptsHtml = allModelNames.map(name => `<option value="${name}" ${groupConfig.orchestratorModelName === name ? 'selected' : ''}>${name}</option>`).join('');
+
+            groupCard.innerHTML = `
+                        <div class="card-header bg-light"><div class="d-flex justify-content-between align-items-center"><h5 class="mb-0 text-info">${groupName}</h5><div><button class="btn btn-success btn-sm me-2" onclick="saveModelGroupConfig('${groupName}', this)">Save Group</button><button class="btn btn-danger btn-sm" onclick="confirmDeleteItem('group', '${groupName}', this)">Delete Group</button></div></div></div>
+                        <div class="card-body">
+                            <div class="row mb-3"><div class="col-md-4"><label for="strategy-group-${sanitizedGroupName}" class="form-label">Strategy:</label><select id="strategy-group-${sanitizedGroupName}" class="form-select form-select-sm group-strategy-select" onchange="toggleGroupStrategyFields('${sanitizedGroupName}', this.value)">${strategyOpts}</select></div></div>
+                            <div class="mb-3"><h6 id="member-models-label-${sanitizedGroupName}">Member Models:</h6><div id="member-models-group-${sanitizedGroupName}" class="list-group list-group-flush border rounded p-2" style="max-height:150px; overflow-y:auto;">${membersHtml}</div><div class="input-group input-group-sm mt-2"><select class="form-select" id="add-member-model-select-${sanitizedGroupName}"><option value="">-- Select model to add --</option>${allModelNames.map(n => `<option value="${n}">${n}</option>`).join('')}</select><button class="btn btn-outline-primary" type="button" onclick="addMemberModelToGroupUI('${sanitizedGroupName}')">Add</button></div></div>
+                            <div id="moa-fields-${sanitizedGroupName}" class="moa-fields-section p-3 mb-3 border rounded" style="display:none;"><h6 class="text-primary">MoA Config:</h6><div class="mb-2"><label for="orchestrator-model-${sanitizedGroupName}" class="form-label">Orchestrator Model:</label><select id="orchestrator-model-${sanitizedGroupName}" class="form-select form-select-sm"><option value="">-- Select --</option>${orchOptsHtml}</select></div><small class="form-text text-muted">"Member Models" above act as <strong>Agents</strong> (min 2).</small></div>
+                            <div id="contentbased-fields-${sanitizedGroupName}" class="contentbased-fields-section p-3 border rounded" style="display:none;"><h6 class="text-primary">Content Based Config:</h6><div id="content-rules-container-${sanitizedGroupName}" class="mb-2"></div><button class="btn btn-outline-info btn-sm mb-2" onclick="addContentRuleUI('${sanitizedGroupName}')">Add Rule</button><div><label for="default-model-contentbased-${sanitizedGroupName}" class="form-label">Default Model (if no rule matches):</label><select id="default-model-contentbased-${sanitizedGroupName}" class="form-select form-select-sm"><option value="">-- None --</option></select></div></div>
+                        </div>`;
+            return groupCard;
+        }
+
+        function toggleGroupStrategyFields(sanitizedGroupName, strategy) {
+            const moaFields = document.getElementById(`moa-fields-${sanitizedGroupName}`);
+            const cbFields = document.getElementById(`contentbased-fields-${sanitizedGroupName}`);
+            const membersLabel = document.getElementById(`member-models-label-${sanitizedGroupName}`);
+            if (moaFields) moaFields.style.display = (strategy === 'MixtureOfAgents') ? 'block' : 'none';
+            if (cbFields) cbFields.style.display = (strategy === 'ContentBased') ? 'block' : 'none';
+            if (membersLabel) membersLabel.textContent = (strategy === 'MixtureOfAgents') ? 'Agent Models (min 2 required):' : 'Member Models:';
+            if (strategy === 'ContentBased') updateDefaultModelForContentBasedOptions(sanitizedGroupName);
+        }
+
+        function addMemberModelToGroupUI(sanitizedGroupName) {
+            const sel = document.getElementById(`add-member-model-select-${sanitizedGroupName}`);
+            const modelId = sel.value; if (!modelId) { showStatus("Select model.", true); return; }
+            const cont = document.getElementById(`member-models-group-${sanitizedGroupName}`);
+            if (Array.from(cont.querySelectorAll('span')).some(s => s.textContent === modelId)) { showStatus("Model already added.", true); sel.value = ""; return; }
+            const ph = cont.querySelector('p.text-muted'); if (ph) ph.remove();
+            cont.insertAdjacentHTML('beforeend', `<div class="d-flex justify-content-between align-items-center mb-1 p-1 border rounded member-model-entry"><span>${modelId}</span><button class="btn btn-outline-danger btn-sm py-0 px-1" onclick="removeMemberModelFromGroupUI('${sanitizedGroupName}', '${modelId}', this)"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-x-circle" viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z" /><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z" /></svg></button></div>`);
+            sel.value = "";
+            if (document.getElementById(`strategy-group-${sanitizedGroupName}`).value === 'ContentBased') updateDefaultModelForContentBasedOptions(sanitizedGroupName);
+        }
+
+        function removeMemberModelFromGroupUI(sanitizedGroupName, modelId, btn) {
+            btn.closest('.member-model-entry').remove();
+            const cont = document.getElementById(`member-models-group-${sanitizedGroupName}`);
+            if (cont.children.length === 0) cont.innerHTML = '<p class="text-muted fst-italic small">No member/agent models.</p>';
+            if (document.getElementById(`strategy-group-${sanitizedGroupName}`).value === 'ContentBased') updateDefaultModelForContentBasedOptions(sanitizedGroupName);
+        }
+
+        function renderContentRules(sanitizedGroupName, rules) {
+            const cont = document.getElementById(`content-rules-container-${sanitizedGroupName}`); if (!cont) return;
+            cont.innerHTML = (!rules || rules.length === 0) ? '<p class="text-muted fst-italic small">No content rules.</p>' : '';
+            rules.forEach((rule, idx) => cont.appendChild(createContentRuleElement(sanitizedGroupName, rule, idx)));
+        }
+
+        function createContentRuleElement(sanitizedGroupName, rule, index) {
+            const ruleDiv = document.createElement('div'); ruleDiv.className = 'content-rule-entry border-bottom pb-2 mb-2';
+            const members = Array.from(document.getElementById(`member-models-group-${sanitizedGroupName}`).querySelectorAll('span')).map(s => s.textContent.trim());
+            let targetOpts = members.map(n => `<option value="${n}" ${rule.targetModelName === n ? 'selected' : ''}>${n}</option>`).join('');
+            if (!members.includes(rule.targetModelName) && rule.targetModelName) targetOpts += `<option value="${rule.targetModelName}" selected disabled>${rule.targetModelName} (invalid)</option>`;
+            ruleDiv.innerHTML = `<div class="row gx-2 gy-1 align-items-center"><div class="col-md-5"><label class="form-label form-label-sm">Regex:</label><input type="text" class="form-control form-control-sm content-rule-regex" value="${rule.regexPattern || ''}"></div><div class="col-md-4"><label class="form-label form-label-sm">Target:</label><select class="form-select form-select-sm content-rule-target"><option value="">-- Select --</option>${targetOpts}</select></div><div class="col-md-2"><label class="form-label form-label-sm">Priority:</label><input type="number" class="form-control form-control-sm content-rule-priority" value="${rule.priority || 0}" min="0"></div><div class="col-md-1 align-self-end"><button class="btn btn-danger btn-sm py-0 px-1 w-100" onclick="this.closest('.content-rule-entry').remove()">X</button></div></div>`;
+            return ruleDiv;
+        }
+
+        function addContentRuleUI(sanitizedGroupName) {
+            const cont = document.getElementById(`content-rules-container-${sanitizedGroupName}`);
+            const ph = cont.querySelector('p.text-muted'); if (ph) ph.remove();
+            cont.appendChild(createContentRuleElement(sanitizedGroupName, { priority: cont.children.length }, cont.children.length));
+        }
+
+        function updateDefaultModelForContentBasedOptions(sanitizedGroupName) {
+            const sel = document.getElementById(`default-model-contentbased-${sanitizedGroupName}`); if (!sel) return;
+            const curVal = sel.value; sel.innerHTML = '<option value="">-- None --</option>';
+            Array.from(document.getElementById(`member-models-group-${sanitizedGroupName}`).querySelectorAll('span'))
+                .map(s => s.textContent.trim()).forEach(n => {
+                    const opt = document.createElement('option'); opt.value = n; opt.textContent = n;
+                    if (n === curVal) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+        }
+
+        async function saveModelGroupConfig(groupName, buttonElement) {
+            toggleButtonSpinner(buttonElement, true);
+            const sanGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
+            const card = document.getElementById(`group-${sanGroupName}`); if (!card) { /* err */ toggleButtonSpinner(buttonElement, false); return; }
+
+            const strategy = card.querySelector(`#strategy-group-${sanGroupName}`).value;
+            const memberModels = Array.from(card.querySelectorAll(`#member-models-group-${sanGroupName} span`)).map(s => s.textContent.trim());
+            let orchModel = null, rules = [], defModelCB = null, validErr = false;
+
+            if (strategy === 'MixtureOfAgents') {
+                orchModel = card.querySelector(`#orchestrator-model-${sanGroupName}`).value;
+                if (!orchModel) { showStatus(`Orchestrator required for MoA group <b>${groupName}</b>.`, true); validErr = true; }
+                if (memberModels.length < 2) { showStatus(`Min 2 Agent Models required for MoA group <b>${groupName}</b>.`, true); validErr = true; }
+                if (orchModel && memberModels.includes(orchModel)) { showStatus(`Orchestrator cannot be an Agent in MoA group <b>${groupName}</b>.`, true); validErr = true; }
+            } else if (strategy === 'ContentBased') {
+                card.querySelectorAll(`#content-rules-container-${sanGroupName} .content-rule-entry`).forEach(el => {
+                    const regex = el.querySelector('.content-rule-regex').value.trim();
+                    const target = el.querySelector('.content-rule-target').value;
+                    const prio = parseInt(el.querySelector('.content-rule-priority').value, 10);
+                    if (!regex || !target) { showStatus(`Content rule incomplete in group <b>${groupName}</b>.`, true); validErr = true; return; }
+                    if (!memberModels.includes(target)) { showStatus(`Rule target '${target}' not a member of group <b>${groupName}</b>.`, true); validErr = true; return; }
+                    rules.push({ regexPattern: regex, targetModelName: target, priority: isNaN(prio) ? 0 : prio });
+                });
+                defModelCB = card.querySelector(`#default-model-contentbased-${sanGroupName}`).value || null;
+                if (defModelCB && !memberModels.includes(defModelCB)) { showStatus(`Default CB model '${defModelCB}' not a member of group <b>${groupName}</b>.`, true); validErr = true; }
+            }
+            if (validErr) { toggleButtonSpinner(buttonElement, false); return; }
+
+            const payload = { strategy, models: memberModels, orchestratorModelName: orchModel, contentRules: rules, defaultModelForContentBased: defModelCB };
+            try {
+                const resp = await fetch(`${groupApiUrl}/${encodeURIComponent(groupName)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const txt = await resp.text();
+                if (!resp.ok) { let err = txt; try { const ej = JSON.parse(txt); err = ej.detail || ej.title || ej.error || JSON.stringify(ej); } catch (e) { } throw new Error(`HTTP ${resp.status}: ${err}`); }
+                showStatus(`Saved group <b>${groupName}</b>.`, false);
+            } catch (error) { showStatus(`Error saving group <b>${groupName}</b>: ${error.message}`, true); }
+            finally { toggleButtonSpinner(buttonElement, false); }
+        }
+
+        function addEmptyModelGroup() {
+            const nameIn = document.getElementById('new-group-name'); const name = nameIn.value.trim();
+            if (!name) { showStatus("Group name required.", true); nameIn.focus(); return; }
+            const sanName = name.replace(/[^a-zA-Z0-9-_]/g, '');
+            if (document.getElementById(`group-${sanName}`)) { showStatus(`Group "<b>${name}</b>" already exists.`, true); return; }
+            const cont = document.getElementById('model-groups-container');
+            const alert = cont.querySelector('.alert-info'); if (alert) alert.remove();
+            const conf = { strategy: 'Failover', models: [], orchestratorModelName: null, contentRules: [], defaultModelForContentBased: null };
+            const card = createModelGroupElement(name, conf); cont.appendChild(card);
+            const stratSel = card.querySelector(`#strategy-group-${sanName}`);
+            if (stratSel) { toggleGroupStrategyFields(sanName, stratSel.value); if (stratSel.value === 'ContentBased') renderContentRules(sanName, []); }
+            nameIn.value = ''; showStatus(`Added section for group "<b>${name}</b>". Configure and Save.`, false);
+        }
+
+        // --- Generic Delete Confirmation ---
+        function confirmDeleteItem(itemType, itemName, buttonElement) {
+            itemPendingDeletion = { name: itemName, type: itemType, buttonElement: buttonElement };
+            document.getElementById('itemTypeToDelete').textContent = itemType;
+            document.getElementById('itemNameToDelete').textContent = itemName;
+            if (!deleteModalInstance) deleteModalInstance = new bootstrap.Modal(document.getElementById('deleteConfirmModal'));
+            deleteModalInstance.show();
+        }
+
+        async function performActualDeletion() {
+            if (!itemPendingDeletion.name || !itemPendingDeletion.type) return;
+            const { name, type, buttonElement } = itemPendingDeletion;
+            if (deleteModalInstance) deleteModalInstance.hide();
+            toggleButtonSpinner(buttonElement, true); // Spinner on original delete button
+
+            const endpoint = type === 'model' ? `${apiUrl}/${encodeURIComponent(name)}` : `${groupApiUrl}/${encodeURIComponent(name)}`;
+            const sanitizedName = name.replace(/[^a-zA-Z0-9-_]/g, '');
+            const elementIdToRemove = type === 'model' ? `model-${sanitizedName}` : `group-${sanitizedName}`;
+            const containerId = type === 'model' ? 'config-container' : 'model-groups-container';
+            const noItemsMessage = type === 'model' ? 'No models configured yet.' : 'No model groups configured yet.';
+
+            try {
+                const response = await fetch(endpoint, { method: 'DELETE' });
+                if (!response.ok) { const txt = await response.text(); let err = txt; try { const ej = JSON.parse(txt); err = ej.detail || ej.title || ej.error || JSON.stringify(ej); } catch (e) { } throw new Error(`HTTP ${response.status}: ${err}`); }
+                showStatus(`Successfully deleted ${type} <b>${name}</b>.`, false);
+                document.getElementById(elementIdToRemove)?.remove();
+                const itemsContainer = document.getElementById(containerId);
+                if (itemsContainer && (itemsContainer.children.length === 0 || (itemsContainer.children.length === 1 && itemsContainer.firstElementChild.classList.contains('alert')))) {
+                    itemsContainer.innerHTML = `<div class="alert alert-info">${noItemsMessage}</div>`;
+                }
+            } catch (error) { showStatus(`Error deleting ${type} <b>${name}</b>: ${error.message}`, true); }
+            finally {
+                toggleButtonSpinner(buttonElement, false);
+                itemPendingDeletion = { name: null, type: null, buttonElement: null }; // Reset
+            }
         }
 
         // --- Initial Load ---
         document.addEventListener('DOMContentLoaded', () => {
             configContainer = document.getElementById('config-container');
             newModelNameInput = document.getElementById('new-model-name');
+            statusMessageContainer = document.getElementById('status-message-container');
             modelGroupsContainer = document.getElementById('model-groups-container');
             newGroupNameInput = document.getElementById('new-group-name');
-            statusMessageContainer = document.getElementById('status-message-container');
 
-            const confirmDeleteBtn = document.getElementById('confirmDeleteButton');
-            if (confirmDeleteBtn) {
-                confirmDeleteBtn.addEventListener('click', performActualDeletion);
-            }
+            const confirmDelBtn = document.getElementById('confirmDeleteButton');
+            if (confirmDelBtn) confirmDelBtn.addEventListener('click', performActualDeletion);
 
-            if (configContainer && newModelNameInput && modelGroupsContainer && newGroupNameInput && statusMessageContainer) {
+            if (configContainer && newModelNameInput && statusMessageContainer && modelGroupsContainer && newGroupNameInput) {
                 loadConfig();
             } else {
-                console.error("One or more critical UI elements not found on DOMContentLoaded.");
-                document.body.insertAdjacentHTML('afterbegin', '<div class="alert alert-danger m-3">Critical UI elements missing. Admin page may not function.</div>');
+                console.error("Critical UI elements missing on DOMContentLoaded.");
+                document.body.insertAdjacentHTML('afterbegin', '<div class="alert alert-danger m-3">Page initialization error: Critical UI elements are missing. Admin functions may not work.</div>');
             }
         });
     </script>
+
+    <!-- Link to Local Bootstrap JS Bundle -->
     <script src="/lib/bootstrap/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
