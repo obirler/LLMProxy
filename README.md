@@ -230,25 +230,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) f
 *   Inspired by various API gateway and proxy concepts.
 *   Utilizes the power of ASP.NET Core and .NET.
 ```
-
-**Key Changes in the README:**
-
-1.  **Updated Overview/Purpose:** Highlighted Model Groups and MoA.
-2.  **Enhanced Key Features:**
-    *   Separated "Model & Model Group Management."
-    *   Detailed all routing strategies, including the new ones for groups (`Content Based`, `Mixture of Agents`).
-    *   Specifically mentioned MoA workflow (agents, orchestrator, streaming).
-    *   Emphasized intelligent error handling (detecting errors in 200 OK responses).
-    *   Mentioned SQLite logging and the `/log.html` UI.
-3.  **Technical Stack:** Added SQLite and frontend technologies.
-4.  **Installation & Running:** Added `dotnet build` and `dotnet ef database update` steps.
-5.  **Initial Configuration (Admin UI):** Expanded to include steps for configuring Model Groups and the different strategies, especially MoA.
-6.  **API Endpoints:**
-    *   Clarified that `/v1/models` lists both models and groups.
-    *   Added new Admin API endpoints for model groups (`/admin/config/groups/*`).
-    *   Added `/log.html` and `/admin/logs/*` endpoints.
-    *   Reinforced the security note for admin endpoints.
-7.  **`dynamic_routing.json` Details:** Updated the example structure to show a Model Group with `MixtureOfAgents` strategy, including `OrchestratorModelName` and how the `Models` list is used for agents.
-8.  **Added "Potential Future Enhancements" section.**
-9.  Minor wording improvements for clarity and accuracy.
-
