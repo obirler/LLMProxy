@@ -8,7 +8,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="wwwroot\icon.ico" />
     <None Include="wwwroot\lib\bootstrap\css\.DS_Store" />
   </ItemGroup>
 
