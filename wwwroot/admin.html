@@ -17,10 +17,44 @@
             vertical-align: -0.125em; /* Align with text */
         }
 
-        .model-group-card .card-header h5 {
-            color: #0dcaf0;
+        /* Custom styling for accordion buttons to align items */
+        .accordion-button-content {
+            display: flex;
+            justify-content: space-between; /* This pushes name to left, buttons to right */
+            align-items: center;
+            width: 100%; /* Ensure it takes full width */
         }
-        /* Bootstrap 'info' color for group headers */
+
+            .accordion-button-content .item-name { /* For model or group name */
+                flex-grow: 1; /* Allows the name to take up available space */
+                margin-right: 1rem; /* Space between name and buttons */
+                font-weight: 500;
+            }
+
+        .accordion-button:not(.collapsed) .item-name { /* Style for expanded item name */
+            color: var(--bs-primary-text-emphasis);
+        }
+
+        .model-group-accordion .accordion-button:not(.collapsed) .item-name {
+            color: var(--bs-info-text-emphasis);
+        }
+
+        .accordion-button-actions { /* Container for the buttons */
+            /* Buttons will naturally align to the right due to justify-content: space-between */
+        }
+
+        .accordion-button-content .model-name {
+            font-weight: 500; /* Make model name slightly bolder */
+        }
+
+        .accordion-button:not(.collapsed) .model-name {
+            color: var(--bs-primary-text-emphasis); /* Or your preferred color for active item */
+        }
+
+        .model-group-accordion .accordion-button:not(.collapsed) .model-name {
+            color: var(--bs-info-text-emphasis);
+        }
+
         .moa-fields-section, .contentbased-fields-section {
             background-color: #f8f9fa; /* Light background for these specific sections */
         }
@@ -45,7 +79,8 @@
         <!-- Regular Models Section -->
         <div class="mb-5">
             <h2 class="h4 border-bottom pb-2 mb-3">Model Configurations</h2>
-            <div id="config-container" class="mb-4">
+            <!-- This div will become the accordion parent for models -->
+            <div id="config-container" class="accordion mb-4">
                 <!-- Initial loading state will be set by JavaScript -->
             </div>
             <div id="add-model-section" class="mt-4 p-3 border bg-light rounded shadow-sm">
@@ -68,7 +103,8 @@
         <!-- Model Groups Section -->
         <div id="model-groups-main-section" class="mt-5 pt-4 border-top">
             <h2 class="h4 border-bottom pb-2 mb-3">Model Group Configurations</h2>
-            <div id="model-groups-container" class="mb-4">
+            <!-- This div will become the accordion parent for model groups -->
+            <div id="model-groups-container" class="accordion model-group-accordion mb-4">
                 <!-- Model groups will be rendered here by JavaScript -->
             </div>
             <div id="add-group-section" class="mt-4 p-3 border bg-light rounded shadow-sm">
@@ -89,7 +125,7 @@
         </div>
     </div>
 
-    <!-- Generic Delete Confirmation Modal -->
+    <!-- Generic Delete Confirmation Modal (Keep as is) -->
     <div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-labelledby="deleteConfirmModalLabel" aria-hidden="true">
         <div class="modal-dialog">
             <div class="modal-content">
@@ -109,19 +145,19 @@
     </div>
 
     <script>
-        // --- Global Variables & Configuration ---
+        // --- Global Variables & Configuration (Keep as is) ---
         let configContainer, newModelNameInput, statusMessageContainer;
-        let modelGroupsContainer, newGroupNameInput; // For groups
+        let modelGroupsContainer, newGroupNameInput;
 
-        const apiUrl = '/admin/config'; // API endpoint for regular models
-        const groupApiUrl = '/admin/config/groups'; // API endpoint for model groups
+        const apiUrl = '/admin/config';
+        const groupApiUrl = '/admin/config/groups';
 
         let deleteModalInstance = null;
-        let itemPendingDeletion = { name: null, type: null, buttonElement: null }; // type can be 'model' or 'group'
+        let itemPendingDeletion = { name: null, type: null, buttonElement: null };
 
-        let currentRegularModelsCache = []; // Cache for regular model names (used by groups)
+        let currentRegularModelsCache = [];
 
-        // --- Helper Functions ---
+        // --- Helper Functions (Keep as is) ---
         function toggleButtonSpinner(buttonElement, show) {
             if (!buttonElement) return;
             if (show) {
@@ -146,7 +182,7 @@
                 const bsAlert = bootstrap.Alert.getInstance(alertDiv);
                 if (bsAlert) bsAlert.close();
                 else if (alertDiv.parentElement) alertDiv.remove();
-            }, isError ? 8000 : 5000); // Longer display for errors
+            }, isError ? 8000 : 5000);
         }
 
         function getAllDefinedModelNames() {
@@ -155,6 +191,7 @@
 
         // --- Data Loading and Rendering (Models & Groups) ---
         async function loadConfig() {
+            // Keep loading states
             if (configContainer) {
                 configContainer.innerHTML = `<div class="text-center py-5"><div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;"><span class="visually-hidden">Loading...</span></div><p class="mt-2 lead">Loading model configurations...</p></div>`;
             }
@@ -173,14 +210,14 @@
                 // Load Model Groups
                 const groupResponse = await fetch(groupApiUrl);
                 if (!groupResponse.ok) throw new Error(`HTTP error loading groups! status: ${groupResponse.status} - ${await groupResponse.text()}`);
-                const groupData = await groupResponse.json(); // Expects dictionary directly
+                const groupData = await groupResponse.json();
                 renderModelGroups(groupData || {});
 
             } catch (error) {
                 console.error('Error loading configurations:', error);
                 const errorMsg = `Error loading configurations. Details: ${error.message}. Check console.`;
-                if (configContainer) configContainer.innerHTML = `<div class="alert alert-danger">${errorMsg}</div>`;
-                if (modelGroupsContainer) modelGroupsContainer.innerHTML = `<div class="alert alert-danger">${errorMsg}</div>`;
+                if (configContainer) configContainer.innerHTML = `<div class="accordion-item"><div class="accordion-header"><button class="accordion-button collapsed" type="button" disabled>Error</button></div><div class="accordion-collapse collapse"><div class="accordion-body"><div class="alert alert-danger m-0">${errorMsg}</div></div></div></div>`;
+                if (modelGroupsContainer) modelGroupsContainer.innerHTML = `<div class="accordion-item"><div class="accordion-header"><button class="accordion-button collapsed" type="button" disabled>Error</button></div><div class="accordion-collapse collapse"><div class="accordion-body"><div class="alert alert-danger m-0">${errorMsg}</div></div></div></div>`;
                 showStatus(errorMsg, true);
             }
         }
@@ -188,89 +225,126 @@
         // --- Regular Model UI Functions ---
         function renderConfig(models) { // Renders regular models
             if (!configContainer) return;
-            configContainer.innerHTML = '';
+            configContainer.innerHTML = ''; // Clear previous content or loading indicator
             if (Object.keys(models).length === 0) {
                 configContainer.innerHTML = '<div class="alert alert-info">No models configured yet. Use the form below to add one.</div>';
             } else {
+                let isFirst = true; // To potentially expand the first item
                 for (const modelName in models) {
-                    const modelCard = createModelElement(modelName, models[modelName]);
-                    configContainer.appendChild(modelCard);
+                    // For existing models, let's start them collapsed by default
+                    const modelAccordionItem = createModelElement(modelName, models[modelName], true); // Pass true to initiallyCollapse
+                    configContainer.appendChild(modelAccordionItem);
                     const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
-                    const strategySelect = modelCard.querySelector(`#strategy-${sanitizedModelName}`);
+                    const strategySelect = modelAccordionItem.querySelector(`#strategy-${sanitizedModelName}`);
                     if (strategySelect) {
                         strategySelect.addEventListener('change', function () {
-                            toggleWeightInputs(modelCard, this.value === 'Weighted');
+                            toggleWeightInputs(modelAccordionItem, this.value === 'Weighted');
                         });
-                        toggleWeightInputs(modelCard, strategySelect.value === 'Weighted'); // Initial call
+                        toggleWeightInputs(modelAccordionItem, strategySelect.value === 'Weighted');
                     }
+                    // isFirst = false; // If you wanted only the very first item expanded
                 }
             }
         }
 
-        function createModelElement(modelName, modelConfig) {
+        function createModelElement(modelName, modelConfig, initiallyCollapsed = true) {
             const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const modelCard = document.createElement('div');
-            modelCard.className = 'card mb-4 shadow-sm model-card';
-            modelCard.id = `model-${sanitizedModelName}`;
+            const accordionItemId = `model-item-${sanitizedModelName}`;
+            const headerId = `model-header-${sanitizedModelName}`;
+            const collapseId = `model-collapse-${sanitizedModelName}`;
+
             const saveButtonId = `save-btn-${sanitizedModelName}`;
             const deleteButtonId = `delete-btn-${sanitizedModelName}`;
 
-            modelCard.innerHTML = `
-                        <div class="card-header bg-light">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <h5 class="mb-0 text-primary">${modelName}</h5>
-                                <div>
-                                    <button id="${saveButtonId}" class="btn btn-success btn-sm me-2" onclick="saveModelConfig('${modelName}', this)">Save Changes</button>
-                                    <button id="${deleteButtonId}" class="btn btn-danger btn-sm" onclick="confirmDeleteItem('model', '${modelName}', this)">Delete Model</button>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <div class="row mb-3">
-                                <div class="col-md-4">
-                                    <label for="strategy-${sanitizedModelName}" class="form-label">Routing Strategy:</label>
-                                    <select id="strategy-${sanitizedModelName}" class="form-select form-select-sm">
-                                        <option value="Failover" ${modelConfig.strategy === 'Failover' ? 'selected' : ''}>Failover</option>
-                                        <option value="RoundRobin" ${modelConfig.strategy === 'RoundRobin' ? 'selected' : ''}>Round Robin</option>
-                                        <option value="Weighted" ${modelConfig.strategy === 'Weighted' ? 'selected' : ''}>Weighted</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <h6>Backends:</h6>
-                            <div id="backends-${sanitizedModelName}" class="mb-3 ps-2">
-                                ${(modelConfig.backends && modelConfig.backends.length > 0) ? modelConfig.backends.map((backend, index) => createBackendElement(modelName, backend, index)).join('') : '<p class="text-muted fst-italic">No backends added yet.</p>'}
-                            </div>
-                            <button class="btn btn-outline-primary btn-sm" onclick="addBackend('${modelName}')">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8.5 4.5a.5.5 0 0 0-1 0v3h-3a.5.5 0 0 0 0 1h3v3a.5.5 0 0 0 1 0v-3h3a.5.5 0 0 0 0-1h-3z" /></svg>
-                                Add Backend
-                            </button>
-                        </div>`;
-            return modelCard;
+            const accordionItem = document.createElement('div');
+            accordionItem.className = 'accordion-item';
+            accordionItem.id = accordionItemId;
+
+            const isCollapsedClass = initiallyCollapsed ? 'collapsed' : '';
+            const ariaExpandedState = initiallyCollapsed ? 'false' : 'true';
+            const showClass = initiallyCollapsed ? '' : 'show';
+
+            // Note the new structure for accordion-button-content and accordion-button-actions
+            accordionItem.innerHTML = `
+                                        <h2 class="accordion-header" id="${headerId}">
+                                            <button class="accordion-button ${isCollapsedClass}" type="button" data-bs-toggle="collapse" data-bs-target="#${collapseId}" aria-expanded="${ariaExpandedState}" aria-controls="${collapseId}">
+                                                <div class="accordion-button-content">
+                                                    <div class="accordion-button-actions" onclick="event.stopPropagation();">
+                                                        <span class="item-name text-primary">${modelName}</span>
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        </h2>
+                                        <div id="${collapseId}" class="accordion-collapse collapse ${showClass}" aria-labelledby="${headerId}" data-bs-parent="#config-container">
+                                            <div class="accordion-body">
+                                                <div class="row mb-3">
+                                                    <div class="col-md-4">
+                                                        <label for="strategy-${sanitizedModelName}" class="form-label">Routing Strategy:</label>
+                                                        <select id="strategy-${sanitizedModelName}" class="form-select form-select-sm">
+                                                            <option value="Failover" ${modelConfig.strategy === 'Failover' ? 'selected' : ''}>Failover</option>
+                                                            <option value="RoundRobin" ${modelConfig.strategy === 'RoundRobin' ? 'selected' : ''}>Round Robin</option>
+                                                            <option value="Weighted" ${modelConfig.strategy === 'Weighted' ? 'selected' : ''}>Weighted</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <h6>Backends:</h6>
+                                                <div id="backends-${sanitizedModelName}" class="mb-3 ps-2">
+                                                    ${(modelConfig.backends && modelConfig.backends.length > 0) ? modelConfig.backends.map((backend, index) => createBackendElement(modelName, backend, index)).join('') : '<p class="text-muted fst-italic">No backends added yet.</p>'}
+                                                </div>
+                                                <div class="d-flex mb-3">
+                                                  <div class="me-auto p-2">
+                                                    <button class="btn btn-outline-primary btn-sm" onclick="addBackend('${modelName}')">
+                                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8.5 4.5a.5.5 0 0 0-1 0v3h-3a.5.5 0 0 0 0 1h3v3a.5.5 0 0 0 1 0v-3h3a.5.5 0 0 0 0-1h-3z" /></svg>
+                                                        Add Backend
+                                                    </button>
+                                                  </div>
+                                                  <div class="p-2">
+                                                    <button id="${saveButtonId}" class="btn btn-outline-success btn-sm me-2" onclick="saveModelConfig('${modelName}', this)">
+                                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-check-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" /></svg>
+                                                        Save Model
+                                                    </button>
+                                                  </div>
+                                                  <div class="p-2">
+                                                    <button id="${deleteButtonId}" class="btn btn-outline-danger btn-sm" onclick="confirmDeleteItem('model', '${modelName}', this)">
+                                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-trash3-fill me-1" viewBox="0 0 16 16"><path d="M11 1.5v1h3.5a.5.5 0 0 1 0 1h-.538l-.853 10.66A2 2 0 0 1 11.115 16h-6.23a2 2 0 0 1-1.994-1.84L2.038 3.5H1.5a.5.5 0 0 1 0-1H5v-1A1.5 1.5 0 0 1 6.5 0h3A1.5 1.5 0 0 1 11 1.5m-5 0v1h4v-1a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5M4.5 5.024l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06m3 0l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06m3 .535l-.5 8.5a.5.5 0 1 0 .998.06l.5-8.5a.5.5 0 1 0-.998.06Z" /></svg>
+                                                        Delete Model
+                                                    </button>
+                                                  </div>
+                                                </div>
+                                            </div>
+                                        </div>`;
+            return accordionItem;
         }
 
-        function createBackendElement(modelName, backend, index) {
+        function createBackendElement(modelName, backend, index) { // Keep this function largely the same
             const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
+            // The ID for the parent accordion item
+            const parentAccordionItemId = `model-item-${sanitizedModelName}`;
+            const modelAccordionItemElement = document.getElementById(parentAccordionItemId);
+
             const backendIdentifier = (backend.name || `new-${index}`).replace(/[^a-zA-Z0-9-_]/g, '');
             const elementIdPrefix = `backend-${sanitizedModelName}-${backendIdentifier}`;
-            const modelCardElement = document.getElementById(`model-${sanitizedModelName}`);
-            const isWeightedStrategy = modelCardElement?.querySelector(`#strategy-${sanitizedModelName}`)?.value === 'Weighted';
+
+            // Check strategy from within the specific model's accordion item
+            const strategySelect = modelAccordionItemElement?.querySelector(`#strategy-${sanitizedModelName}`);
+            const isWeightedStrategy = strategySelect?.value === 'Weighted';
 
             return `
-                        <div class="card mb-3 border-light-subtle shadow-sm backend-card" id="${elementIdPrefix}">
-                            <div class="card-body p-3">
-                                <div class="row g-3">
-                                    <div class="col-md-6"><label for="name-${elementIdPrefix}" class="form-label">Backend Name:</label><input type="text" id="name-${elementIdPrefix}" class="form-control form-control-sm backend-name" value="${backend.name || ''}" placeholder="Unique name"></div>
-                                    <div class="col-md-6"><label for="baseUrl-${elementIdPrefix}" class="form-label">Base URL:</label><input type="text" id="baseUrl-${elementIdPrefix}" class="form-control form-control-sm backend-baseUrl" value="${backend.baseUrl || ''}" placeholder="e.g., https://api.openai.com/v1"></div>
-                                    <div class="col-12"><label for="apiKeys-${elementIdPrefix}" class="form-label">API Keys (comma-separated):</label><textarea id="apiKeys-${elementIdPrefix}" class="form-control form-control-sm backend-apiKeys" rows="2" placeholder="key1,key2">${backend.apiKeys ? backend.apiKeys.join(',') : ''}</textarea></div>
-                                    <div class="col-md-7"><label for="backendModelName-${elementIdPrefix}" class="form-label">Backend-Specific Model Name (Opt.):</label><input type="text" id="backendModelName-${elementIdPrefix}" class="form-control form-control-sm backend-backendModelName" value="${backend.backendModelName || ''}" placeholder="Overrides main model name"></div>
-                                    <div class="col-md-2"><label for="weight-${elementIdPrefix}" class="form-label">Weight:</label><input type="number" id="weight-${elementIdPrefix}" class="form-control form-control-sm backend-weight" value="${backend.weight || 1}" min="1" ${!isWeightedStrategy ? 'disabled' : ''}></div>
-                                    <div class="col-md-3 d-flex align-items-end justify-content-between">
-                                        <div class="form-check form-switch pt-1"><input class="form-check-input backend-enabled" type="checkbox" role="switch" id="enabled-${elementIdPrefix}" ${backend.enabled !== false ? 'checked' : ''}><label class="form-check-label" for="enabled-${elementIdPrefix}">Enabled</label></div>
-                                        <button class="btn btn-outline-danger btn-sm" onclick="removeBackendElement('${elementIdPrefix}')"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-dash-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M4.5 7.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1z" /></svg>Remove</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>`;
+                                                <div class="card mb-3 border-light-subtle shadow-sm backend-card" id="${elementIdPrefix}">
+                                                    <div class="card-body p-3">
+                                                        <div class="row g-3">
+                                                            <div class="col-md-6"><label for="name-${elementIdPrefix}" class="form-label">Backend Name:</label><input type="text" id="name-${elementIdPrefix}" class="form-control form-control-sm backend-name" value="${backend.name || ''}" placeholder="Unique name"></div>
+                                                            <div class="col-md-6"><label for="baseUrl-${elementIdPrefix}" class="form-label">Base URL:</label><input type="text" id="baseUrl-${elementIdPrefix}" class="form-control form-control-sm backend-baseUrl" value="${backend.baseUrl || ''}" placeholder="e.g., https://api.openai.com/v1"></div>
+                                                            <div class="col-12"><label for="apiKeys-${elementIdPrefix}" class="form-label">API Keys (comma-separated):</label><textarea id="apiKeys-${elementIdPrefix}" class="form-control form-control-sm backend-apiKeys" rows="2" placeholder="key1,key2">${backend.apiKeys ? backend.apiKeys.join(',') : ''}</textarea></div>
+                                                            <div class="col-md-7"><label for="backendModelName-${elementIdPrefix}" class="form-label">Backend-Specific Model Name (Opt.):</label><input type="text" id="backendModelName-${elementIdPrefix}" class="form-control form-control-sm backend-backendModelName" value="${backend.backendModelName || ''}" placeholder="Overrides main model name"></div>
+                                                            <div class="col-md-2"><label for="weight-${elementIdPrefix}" class="form-label">Weight:</label><input type="number" id="weight-${elementIdPrefix}" class="form-control form-control-sm backend-weight" value="${backend.weight || 1}" min="1" ${!isWeightedStrategy ? 'disabled' : ''}></div>
+                                                            <div class="col-md-3 d-flex align-items-end justify-content-between">
+                                                                <div class="form-check form-switch pt-1"><input class="form-check-input backend-enabled" type="checkbox" role="switch" id="enabled-${elementIdPrefix}" ${backend.enabled !== false ? 'checked' : ''}><label class="form-check-label" for="enabled-${elementIdPrefix}">Enabled</label></div>
+                                                                <button class="btn btn-outline-danger btn-sm" onclick="removeBackendElement('${elementIdPrefix}')"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-dash-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M4.5 7.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1z" /></svg>Remove</button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>`;
         }
 
         function addEmptyModel() {
@@ -278,25 +352,31 @@
             const modelName = newModelNameInput.value.trim();
             if (!modelName) { showStatus("Please enter a model name.", true); newModelNameInput.focus(); return; }
             const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
-            if (document.getElementById(`model-${sanitizedModelName}`)) { showStatus(`Model "<b>${modelName}</b>" already exists.`, true); return; }
+            // Check for accordion item ID
+            if (document.getElementById(`model-item-${sanitizedModelName}`)) {
+                showStatus(`Model "<b>${modelName}</b>" already exists.`, true); return;
+            }
             const noModelsAlert = configContainer.querySelector('.alert-info');
-            if (noModelsAlert) noModelsAlert.remove();
+            if (noModelsAlert) noModelsAlert.remove(); // Remove "No models..." message
+
             const newModelConfig = { strategy: 'Failover', backends: [] };
-            const modelCard = createModelElement(modelName, newModelConfig);
-            configContainer.appendChild(modelCard);
-            const strategySelect = modelCard.querySelector(`#strategy-${sanitizedModelName}`); // Attach listener for new card
+            // Add new model as an expanded accordion item (initiallyCollapsed = false)
+            const modelAccordionItem = createModelElement(modelName, newModelConfig, false);
+            configContainer.appendChild(modelAccordionItem);
+
+            const strategySelect = modelAccordionItem.querySelector(`#strategy-${sanitizedModelName}`);
             if (strategySelect) {
-                strategySelect.addEventListener('change', function () { toggleWeightInputs(modelCard, this.value === 'Weighted'); });
-                toggleWeightInputs(modelCard, strategySelect.value === 'Weighted'); // Initial call
+                strategySelect.addEventListener('change', function () { toggleWeightInputs(modelAccordionItem, this.value === 'Weighted'); });
+                toggleWeightInputs(modelAccordionItem, strategySelect.value === 'Weighted');
             }
             newModelNameInput.value = '';
             showStatus(`Added section for model "<b>${modelName}</b>". Add backends and Save.`, false);
         }
 
-        function addBackend(modelName) {
+        function addBackend(modelName) { // Should largely work, but ensure parent context is the accordion item
             const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
             const backendsDiv = document.getElementById(`backends-${sanitizedModelName}`);
-            if (!backendsDiv) return;
+            if (!backendsDiv) { console.error(`Backends div not found for ${modelName}`); return; }
             const placeholder = backendsDiv.querySelector('p.text-muted');
             if (placeholder) placeholder.remove();
             const newIndex = backendsDiv.querySelectorAll('.backend-card').length;
@@ -304,7 +384,7 @@
             backendsDiv.insertAdjacentHTML('beforeend', createBackendElement(modelName, newBackend, newIndex));
         }
 
-        function removeBackendElement(backendElementId) {
+        function removeBackendElement(backendElementId) { // Keep as is
             const backendElement = document.getElementById(backendElementId);
             if (backendElement) {
                 const parentBackendsDiv = backendElement.parentElement;
@@ -315,19 +395,24 @@
             }
         }
 
-        function toggleWeightInputs(modelCardElement, isWeighted) {
-            const weightInputs = modelCardElement.querySelectorAll('.backend-weight');
+        function toggleWeightInputs(modelAccordionItemElement, isWeighted) { // modelAccordionItemElement is the .accordion-item div
+            const weightInputs = modelAccordionItemElement.querySelectorAll('.backend-weight');
             weightInputs.forEach(input => { input.disabled = !isWeighted; });
         }
 
         async function saveModelConfig(modelName, buttonElement) {
             toggleButtonSpinner(buttonElement, true);
             const sanitizedModelName = modelName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const modelDiv = document.getElementById(`model-${sanitizedModelName}`);
-            if (!modelDiv) { /* ... error ... */ toggleButtonSpinner(buttonElement, false); return; }
+            // Get the accordion item, which is the main container for this model's config
+            const modelAccordionItem = document.getElementById(`model-item-${sanitizedModelName}`);
+            if (!modelAccordionItem) {
+                showStatus(`Error: Could not find UI elements for model ${modelName}.`, true);
+                toggleButtonSpinner(buttonElement, false);
+                return;
+            }
 
-            const strategy = modelDiv.querySelector(`#strategy-${sanitizedModelName}`).value;
-            const backendElements = modelDiv.querySelectorAll(`#backends-${sanitizedModelName} .backend-card`);
+            const strategy = modelAccordionItem.querySelector(`#strategy-${sanitizedModelName}`).value;
+            const backendElements = modelAccordionItem.querySelectorAll(`#backends-${sanitizedModelName} .backend-card`);
             const backends = []; let hasValidationError = false;
 
             backendElements.forEach((be, index) => {
@@ -350,6 +435,11 @@
                 const responseText = await response.text();
                 if (!response.ok) { let err = responseText; try { const ej = JSON.parse(responseText); err = ej.detail || ej.title || ej.error || JSON.stringify(ej); } catch (e) { } throw new Error(`HTTP ${response.status}: ${err}`); }
                 showStatus(`Successfully saved config for model <b>${modelName}</b>.`, false);
+                // Update cache if model name was new (though this function is for existing)
+                if (!currentRegularModelsCache.includes(modelName)) {
+                    currentRegularModelsCache.push(modelName);
+                    currentRegularModelsCache.sort();
+                }
             } catch (error) { showStatus(`Error saving model <b>${modelName}</b>: ${error.message}`, true); }
             finally { toggleButtonSpinner(buttonElement, false); }
         }
@@ -361,52 +451,94 @@
             if (Object.keys(groups).length === 0) {
                 modelGroupsContainer.innerHTML = '<div class="alert alert-info">No model groups configured yet.</div>';
             } else {
+                let isFirst = true; // To potentially expand the first item
                 for (const groupName in groups) {
-                    const groupCard = createModelGroupElement(groupName, groups[groupName]);
-                    modelGroupsContainer.appendChild(groupCard);
+                    // For existing groups, let's start them collapsed by default
+                    const groupAccordionItem = createModelGroupElement(groupName, groups[groupName], true); // Pass true to initiallyCollapse
+                    modelGroupsContainer.appendChild(groupAccordionItem);
                     const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-                    const strategySelect = groupCard.querySelector(`#strategy-group-${sanitizedGroupName}`);
+                    const strategySelect = groupAccordionItem.querySelector(`#strategy-group-${sanitizedGroupName}`);
                     if (strategySelect) {
                         toggleGroupStrategyFields(sanitizedGroupName, strategySelect.value);
                         if (strategySelect.value === 'ContentBased') {
                             renderContentRules(sanitizedGroupName, groups[groupName].contentRules || []);
                         }
                     }
+                    // isFirst = false; // If you wanted only the very first item expanded
                 }
             }
         }
 
-        function createModelGroupElement(groupName, groupConfig) {
+        function createModelGroupElement(groupName, groupConfig, initiallyCollapsed = true) {
             const sanitizedGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const groupCard = document.createElement('div');
-            groupCard.className = 'card mb-4 shadow-sm model-group-card';
-            groupCard.id = `group-${sanitizedGroupName}`;
+            const accordionItemId = `group-item-${sanitizedGroupName}`;
+            const headerId = `group-header-${sanitizedGroupName}`;
+            const collapseId = `group-collapse-${sanitizedGroupName}`;
+
+            const accordionItem = document.createElement('div');
+            accordionItem.className = 'accordion-item'; // For model groups, ensure this is added to the model-groups-container accordion
+            accordionItem.id = accordionItemId;
 
             const allModelNames = getAllDefinedModelNames();
             const strategyOpts = `
-                        <option value="Failover" ${groupConfig.strategy === 'Failover' ? 'selected' : ''}>Failover</option>
-                        <option value="RoundRobin" ${groupConfig.strategy === 'RoundRobin' ? 'selected' : ''}>Round Robin</option>
-                        <option value="Weighted" ${groupConfig.strategy === 'Weighted' ? 'selected' : ''}>Weighted (Members)</option>
-                        <option value="ContentBased" ${groupConfig.strategy === 'ContentBased' ? 'selected' : ''}>Content Based</option>
-                        <option value="MixtureOfAgents" ${groupConfig.strategy === 'MixtureOfAgents' ? 'selected' : ''}>Mixture of Agents</option>`;
+                                        <option value="Failover" ${groupConfig.strategy === 'Failover' ? 'selected' : ''}>Failover</option>
+                                        <option value="RoundRobin" ${groupConfig.strategy === 'RoundRobin' ? 'selected' : ''}>Round Robin</option>
+                                        <option value="Weighted" ${groupConfig.strategy === 'Weighted' ? 'selected' : ''}>Weighted (Members)</option>
+                                        <option value="ContentBased" ${groupConfig.strategy === 'ContentBased' ? 'selected' : ''}>Content Based</option>
+                                        <option value="MixtureOfAgents" ${groupConfig.strategy === 'MixtureOfAgents' ? 'selected' : ''}>Mixture of Agents</option>`;
+
             let membersHtml = '<p class="text-muted fst-italic small">No member/agent models.</p>';
             if (groupConfig.models && groupConfig.models.length > 0) {
                 membersHtml = groupConfig.models.map(mId => `<div class="d-flex justify-content-between align-items-center mb-1 p-1 border rounded member-model-entry"><span>${mId}</span><button class="btn btn-outline-danger btn-sm py-0 px-1" onclick="removeMemberModelFromGroupUI('${sanitizedGroupName}', '${mId}', this)"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-x-circle" viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z" /><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z" /></svg></button></div>`).join('');
             }
             let orchOptsHtml = allModelNames.map(name => `<option value="${name}" ${groupConfig.orchestratorModelName === name ? 'selected' : ''}>${name}</option>`).join('');
 
-            groupCard.innerHTML = `
-                        <div class="card-header bg-light"><div class="d-flex justify-content-between align-items-center"><h5 class="mb-0 text-info">${groupName}</h5><div><button class="btn btn-success btn-sm me-2" onclick="saveModelGroupConfig('${groupName}', this)">Save Group</button><button class="btn btn-danger btn-sm" onclick="confirmDeleteItem('group', '${groupName}', this)">Delete Group</button></div></div></div>
-                        <div class="card-body">
-                            <div class="row mb-3"><div class="col-md-4"><label for="strategy-group-${sanitizedGroupName}" class="form-label">Strategy:</label><select id="strategy-group-${sanitizedGroupName}" class="form-select form-select-sm group-strategy-select" onchange="toggleGroupStrategyFields('${sanitizedGroupName}', this.value)">${strategyOpts}</select></div></div>
-                            <div class="mb-3"><h6 id="member-models-label-${sanitizedGroupName}">Member Models:</h6><div id="member-models-group-${sanitizedGroupName}" class="list-group list-group-flush border rounded p-2" style="max-height:150px; overflow-y:auto;">${membersHtml}</div><div class="input-group input-group-sm mt-2"><select class="form-select" id="add-member-model-select-${sanitizedGroupName}"><option value="">-- Select model to add --</option>${allModelNames.map(n => `<option value="${n}">${n}</option>`).join('')}</select><button class="btn btn-outline-primary" type="button" onclick="addMemberModelToGroupUI('${sanitizedGroupName}')">Add</button></div></div>
-                            <div id="moa-fields-${sanitizedGroupName}" class="moa-fields-section p-3 mb-3 border rounded" style="display:none;"><h6 class="text-primary">MoA Config:</h6><div class="mb-2"><label for="orchestrator-model-${sanitizedGroupName}" class="form-label">Orchestrator Model:</label><select id="orchestrator-model-${sanitizedGroupName}" class="form-select form-select-sm"><option value="">-- Select --</option>${orchOptsHtml}</select></div><small class="form-text text-muted">"Member Models" above act as <strong>Agents</strong> (min 2).</small></div>
-                            <div id="contentbased-fields-${sanitizedGroupName}" class="contentbased-fields-section p-3 border rounded" style="display:none;"><h6 class="text-primary">Content Based Config:</h6><div id="content-rules-container-${sanitizedGroupName}" class="mb-2"></div><button class="btn btn-outline-info btn-sm mb-2" onclick="addContentRuleUI('${sanitizedGroupName}')">Add Rule</button><div><label for="default-model-contentbased-${sanitizedGroupName}" class="form-label">Default Model (if no rule matches):</label><select id="default-model-contentbased-${sanitizedGroupName}" class="form-select form-select-sm"><option value="">-- None --</option></select></div></div>
-                        </div>`;
-            return groupCard;
+            const isCollapsedClass = initiallyCollapsed ? 'collapsed' : '';
+            const ariaExpandedState = initiallyCollapsed ? 'false' : 'true';
+            const showClass = initiallyCollapsed ? '' : 'show';
+
+            // Note the new structure for accordion-button-content and accordion-button-actions
+            accordionItem.innerHTML = `
+                                        <h2 class="accordion-header" id="${headerId}">
+                                            <button class="accordion-button ${isCollapsedClass}" type="button" data-bs-toggle="collapse" data-bs-target="#${collapseId}" aria-expanded="${ariaExpandedState}" aria-controls="${collapseId}">
+                                                <div class="accordion-button-content">
+
+                                                    <div class="accordion-button-actions" onclick="event.stopPropagation();">
+                                                        <span class="item-name text-info">${groupName}</span>
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        </h2>
+                                        <div id="${collapseId}" class="accordion-collapse collapse ${showClass}" aria-labelledby="${headerId}" data-bs-parent="#model-groups-container">
+                                            <div class="accordion-body">
+                                                <div class="row mb-3"><div class="col-md-4"><label for="strategy-group-${sanitizedGroupName}" class="form-label">Strategy:</label><select id="strategy-group-${sanitizedGroupName}" class="form-select form-select-sm group-strategy-select" onchange="toggleGroupStrategyFields('${sanitizedGroupName}', this.value)">${strategyOpts}</select></div></div>
+                                                <div class="mb-3"><h6 id="member-models-label-${sanitizedGroupName}">Member Models:</h6><div id="member-models-group-${sanitizedGroupName}" class="list-group list-group-flush border rounded p-2" style="max-height:150px; overflow-y:auto;">${membersHtml}</div><div class="input-group input-group-sm mt-2"><select class="form-select" id="add-member-model-select-${sanitizedGroupName}"><option value="">-- Select model to add --</option>${allModelNames.map(n => `<option value="${n}">${n}</option>`).join('')}</select><button class="btn btn-outline-primary" type="button" onclick="addMemberModelToGroupUI('${sanitizedGroupName}')">Add</button></div></div>
+                                                <div id="moa-fields-${sanitizedGroupName}" class="moa-fields-section p-3 mb-3 border rounded" style="display:none;"><h6 class="text-primary">MoA Config:</h6><div class="mb-2"><label for="orchestrator-model-${sanitizedGroupName}" class="form-label">Orchestrator Model:</label><select id="orchestrator-model-${sanitizedGroupName}" class="form-select form-select-sm"><option value="">-- Select --</option>${orchOptsHtml}</select></div><small class="form-text text-muted">"Member Models" above act as <strong>Agents</strong> (min 2).</small></div>
+                                                <div id="contentbased-fields-${sanitizedGroupName}" class="contentbased-fields-section p-3 border rounded" style="display:none;"><h6 class="text-primary">Content Based Config:</h6><div id="content-rules-container-${sanitizedGroupName}" class="mb-2"></div><button class="btn btn-outline-info btn-sm mb-2" onclick="addContentRuleUI('${sanitizedGroupName}')">Add Rule</button><div><label for="default-model-contentbased-${sanitizedGroupName}" class="form-label">Default Model (if no rule matches):</label><select id="default-model-contentbased-${sanitizedGroupName}" class="form-select form-select-sm"><option value="">-- None --</option></select></div></div>
+                                                <div class="d-flex mb-3">
+                                                    <div class="p-2">
+                                                      <button class="btn btn-outline-success btn-sm me-2" onclick="saveModelGroupConfig('${groupName}', this)">
+                                                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-check-circle-fill me-1" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" /></svg>
+                                                          Save Group
+                                                      </button>
+                                                    </div>
+                                                    <div class="p-2">
+                                                        <button class="btn btn-outline-danger btn-sm" onclick="confirmDeleteItem('group', '${groupName}', this)">
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-trash3-fill me-1" viewBox="0 0 16 16"><path d="M11 1.5v1h3.5a.5.5 0 0 1 0 1h-.538l-.853 10.66A2 2 0 0 1 11.115 16h-6.23a2 2 0 0 1-1.994-1.84L2.038 3.5H1.5a.5.5 0 0 1 0-1H5v-1A1.5 1.5 0 0 1 6.5 0h3A1.5 1.5 0 0 1 11 1.5m-5 0v1h4v-1a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5M4.5 5.024l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06m3 0l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06m3 .535l-.5 8.5a.5.5 0 1 0 .998.06l.5-8.5a.5.5 0 1 0-.998.06Z" /></svg>
+                                                            Delete Group
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>`;
+            return accordionItem;
         }
 
-        function toggleGroupStrategyFields(sanitizedGroupName, strategy) {
+        // toggleGroupStrategyFields, addMemberModelToGroupUI, removeMemberModelFromGroupUI,
+        // renderContentRules, createContentRuleElement, addContentRuleUI, updateDefaultModelForContentBasedOptions
+        // should mostly work as they refer to elements within the accordion body.
+        // Make sure they are still finding their elements correctly.
+        function toggleGroupStrategyFields(sanitizedGroupName, strategy) { // Keep as is
             const moaFields = document.getElementById(`moa-fields-${sanitizedGroupName}`);
             const cbFields = document.getElementById(`contentbased-fields-${sanitizedGroupName}`);
             const membersLabel = document.getElementById(`member-models-label-${sanitizedGroupName}`);
@@ -416,7 +548,7 @@
             if (strategy === 'ContentBased') updateDefaultModelForContentBasedOptions(sanitizedGroupName);
         }
 
-        function addMemberModelToGroupUI(sanitizedGroupName) {
+        function addMemberModelToGroupUI(sanitizedGroupName) { // Keep as is
             const sel = document.getElementById(`add-member-model-select-${sanitizedGroupName}`);
             const modelId = sel.value; if (!modelId) { showStatus("Select model.", true); return; }
             const cont = document.getElementById(`member-models-group-${sanitizedGroupName}`);
@@ -427,20 +559,20 @@
             if (document.getElementById(`strategy-group-${sanitizedGroupName}`).value === 'ContentBased') updateDefaultModelForContentBasedOptions(sanitizedGroupName);
         }
 
-        function removeMemberModelFromGroupUI(sanitizedGroupName, modelId, btn) {
+        function removeMemberModelFromGroupUI(sanitizedGroupName, modelId, btn) { // Keep as is
             btn.closest('.member-model-entry').remove();
             const cont = document.getElementById(`member-models-group-${sanitizedGroupName}`);
             if (cont.children.length === 0) cont.innerHTML = '<p class="text-muted fst-italic small">No member/agent models.</p>';
             if (document.getElementById(`strategy-group-${sanitizedGroupName}`).value === 'ContentBased') updateDefaultModelForContentBasedOptions(sanitizedGroupName);
         }
 
-        function renderContentRules(sanitizedGroupName, rules) {
+        function renderContentRules(sanitizedGroupName, rules) { // Keep as is
             const cont = document.getElementById(`content-rules-container-${sanitizedGroupName}`); if (!cont) return;
             cont.innerHTML = (!rules || rules.length === 0) ? '<p class="text-muted fst-italic small">No content rules.</p>' : '';
             rules.forEach((rule, idx) => cont.appendChild(createContentRuleElement(sanitizedGroupName, rule, idx)));
         }
 
-        function createContentRuleElement(sanitizedGroupName, rule, index) {
+        function createContentRuleElement(sanitizedGroupName, rule, index) { // Keep as is
             const ruleDiv = document.createElement('div'); ruleDiv.className = 'content-rule-entry border-bottom pb-2 mb-2';
             const members = Array.from(document.getElementById(`member-models-group-${sanitizedGroupName}`).querySelectorAll('span')).map(s => s.textContent.trim());
             let targetOpts = members.map(n => `<option value="${n}" ${rule.targetModelName === n ? 'selected' : ''}>${n}</option>`).join('');
@@ -449,13 +581,13 @@
             return ruleDiv;
         }
 
-        function addContentRuleUI(sanitizedGroupName) {
+        function addContentRuleUI(sanitizedGroupName) { // Keep as is
             const cont = document.getElementById(`content-rules-container-${sanitizedGroupName}`);
             const ph = cont.querySelector('p.text-muted'); if (ph) ph.remove();
             cont.appendChild(createContentRuleElement(sanitizedGroupName, { priority: cont.children.length }, cont.children.length));
         }
 
-        function updateDefaultModelForContentBasedOptions(sanitizedGroupName) {
+        function updateDefaultModelForContentBasedOptions(sanitizedGroupName) { // Keep as is
             const sel = document.getElementById(`default-model-contentbased-${sanitizedGroupName}`); if (!sel) return;
             const curVal = sel.value; sel.innerHTML = '<option value="">-- None --</option>';
             Array.from(document.getElementById(`member-models-group-${sanitizedGroupName}`).querySelectorAll('span'))
@@ -469,19 +601,25 @@
         async function saveModelGroupConfig(groupName, buttonElement) {
             toggleButtonSpinner(buttonElement, true);
             const sanGroupName = groupName.replace(/[^a-zA-Z0-9-_]/g, '');
-            const card = document.getElementById(`group-${sanGroupName}`); if (!card) { /* err */ toggleButtonSpinner(buttonElement, false); return; }
+            // Get the accordion item for the group
+            const groupAccordionItem = document.getElementById(`group-item-${sanGroupName}`);
+            if (!groupAccordionItem) {
+                showStatus(`Error: Could not find UI elements for group ${groupName}.`, true);
+                toggleButtonSpinner(buttonElement, false);
+                return;
+            }
 
-            const strategy = card.querySelector(`#strategy-group-${sanGroupName}`).value;
-            const memberModels = Array.from(card.querySelectorAll(`#member-models-group-${sanGroupName} span`)).map(s => s.textContent.trim());
+            const strategy = groupAccordionItem.querySelector(`#strategy-group-${sanGroupName}`).value;
+            const memberModels = Array.from(groupAccordionItem.querySelectorAll(`#member-models-group-${sanGroupName} span`)).map(s => s.textContent.trim());
             let orchModel = null, rules = [], defModelCB = null, validErr = false;
 
             if (strategy === 'MixtureOfAgents') {
-                orchModel = card.querySelector(`#orchestrator-model-${sanGroupName}`).value;
+                orchModel = groupAccordionItem.querySelector(`#orchestrator-model-${sanGroupName}`).value;
                 if (!orchModel) { showStatus(`Orchestrator required for MoA group <b>${groupName}</b>.`, true); validErr = true; }
                 if (memberModels.length < 2) { showStatus(`Min 2 Agent Models required for MoA group <b>${groupName}</b>.`, true); validErr = true; }
                 if (orchModel && memberModels.includes(orchModel)) { showStatus(`Orchestrator cannot be an Agent in MoA group <b>${groupName}</b>.`, true); validErr = true; }
             } else if (strategy === 'ContentBased') {
-                card.querySelectorAll(`#content-rules-container-${sanGroupName} .content-rule-entry`).forEach(el => {
+                groupAccordionItem.querySelectorAll(`#content-rules-container-${sanGroupName} .content-rule-entry`).forEach(el => {
                     const regex = el.querySelector('.content-rule-regex').value.trim();
                     const target = el.querySelector('.content-rule-target').value;
                     const prio = parseInt(el.querySelector('.content-rule-priority').value, 10);
@@ -489,7 +627,7 @@
                     if (!memberModels.includes(target)) { showStatus(`Rule target '${target}' not a member of group <b>${groupName}</b>.`, true); validErr = true; return; }
                     rules.push({ regexPattern: regex, targetModelName: target, priority: isNaN(prio) ? 0 : prio });
                 });
-                defModelCB = card.querySelector(`#default-model-contentbased-${sanGroupName}`).value || null;
+                defModelCB = groupAccordionItem.querySelector(`#default-model-contentbased-${sanGroupName}`).value || null;
                 if (defModelCB && !memberModels.includes(defModelCB)) { showStatus(`Default CB model '${defModelCB}' not a member of group <b>${groupName}</b>.`, true); validErr = true; }
             }
             if (validErr) { toggleButtonSpinner(buttonElement, false); return; }
@@ -508,18 +646,26 @@
             const nameIn = document.getElementById('new-group-name'); const name = nameIn.value.trim();
             if (!name) { showStatus("Group name required.", true); nameIn.focus(); return; }
             const sanName = name.replace(/[^a-zA-Z0-9-_]/g, '');
-            if (document.getElementById(`group-${sanName}`)) { showStatus(`Group "<b>${name}</b>" already exists.`, true); return; }
+            // Check for accordion item ID
+            if (document.getElementById(`group-item-${sanName}`)) {
+                showStatus(`Group "<b>${name}</b>" already exists.`, true); return;
+            }
             const cont = document.getElementById('model-groups-container');
-            const alert = cont.querySelector('.alert-info'); if (alert) alert.remove();
+            const alertMsg = cont.querySelector('.alert-info'); if (alertMsg) alertMsg.remove();
             const conf = { strategy: 'Failover', models: [], orchestratorModelName: null, contentRules: [], defaultModelForContentBased: null };
-            const card = createModelGroupElement(name, conf); cont.appendChild(card);
-            const stratSel = card.querySelector(`#strategy-group-${sanName}`);
-            if (stratSel) { toggleGroupStrategyFields(sanName, stratSel.value); if (stratSel.value === 'ContentBased') renderContentRules(sanName, []); }
+            // Add new group as an expanded accordion item (initiallyCollapsed = false)
+            const groupAccordionItem = createModelGroupElement(name, conf, false);
+            cont.appendChild(groupAccordionItem);
+            const stratSel = groupAccordionItem.querySelector(`#strategy-group-${sanName}`);
+            if (stratSel) {
+                toggleGroupStrategyFields(sanName, stratSel.value);
+                if (stratSel.value === 'ContentBased') renderContentRules(sanName, []);
+            }
             nameIn.value = ''; showStatus(`Added section for group "<b>${name}</b>". Configure and Save.`, false);
         }
 
         // --- Generic Delete Confirmation ---
-        function confirmDeleteItem(itemType, itemName, buttonElement) {
+        function confirmDeleteItem(itemType, itemName, buttonElement) { // Keep as is
             itemPendingDeletion = { name: itemName, type: itemType, buttonElement: buttonElement };
             document.getElementById('itemTypeToDelete').textContent = itemType;
             document.getElementById('itemNameToDelete').textContent = itemName;
@@ -527,25 +673,39 @@
             deleteModalInstance.show();
         }
 
-        async function performActualDeletion() {
+        async function performActualDeletion() { // Logic needs to remove accordion item
             if (!itemPendingDeletion.name || !itemPendingDeletion.type) return;
             const { name, type, buttonElement } = itemPendingDeletion;
             if (deleteModalInstance) deleteModalInstance.hide();
-            toggleButtonSpinner(buttonElement, true); // Spinner on original delete button
+            toggleButtonSpinner(buttonElement, true);
 
             const endpoint = type === 'model' ? `${apiUrl}/${encodeURIComponent(name)}` : `${groupApiUrl}/${encodeURIComponent(name)}`;
             const sanitizedName = name.replace(/[^a-zA-Z0-9-_]/g, '');
-            const elementIdToRemove = type === 'model' ? `model-${sanitizedName}` : `group-${sanitizedName}`;
-            const containerId = type === 'model' ? 'config-container' : 'model-groups-container';
-            const noItemsMessage = type === 'model' ? 'No models configured yet.' : 'No model groups configured yet.';
+            // ID of the accordion item to remove
+            const elementIdToRemove = type === 'model' ? `model-item-${sanitizedName}` : `group-item-${sanitizedName}`;
+            const accordionContainerId = type === 'model' ? 'config-container' : 'model-groups-container';
+            const noItemsMessage = type === 'model' ? 'No models configured yet. Use the form below to add one.' : 'No model groups configured yet.';
 
             try {
                 const response = await fetch(endpoint, { method: 'DELETE' });
                 if (!response.ok) { const txt = await response.text(); let err = txt; try { const ej = JSON.parse(txt); err = ej.detail || ej.title || ej.error || JSON.stringify(ej); } catch (e) { } throw new Error(`HTTP ${response.status}: ${err}`); }
                 showStatus(`Successfully deleted ${type} <b>${name}</b>.`, false);
                 document.getElementById(elementIdToRemove)?.remove();
-                const itemsContainer = document.getElementById(containerId);
-                if (itemsContainer && (itemsContainer.children.length === 0 || (itemsContainer.children.length === 1 && itemsContainer.firstElementChild.classList.contains('alert')))) {
+
+                // If it's a model, update the cache
+                if (type === 'model') {
+                    currentRegularModelsCache = currentRegularModelsCache.filter(m => m !== name);
+                    // TODO: Potentially refresh group UI if this model was used in groups' dropdowns
+                    // For simplicity, a full re-render or manual removal from dropdowns would be needed
+                    // Or, a more complex update mechanism for all group dropdowns.
+                    // For now, just reloading groups after model deletion to refresh dropdowns.
+                    const groupResponse = await fetch(groupApiUrl); // Re-fetch groups
+                    const groupData = await groupResponse.json();
+                    renderModelGroups(groupData || {}); // Re-render groups
+                }
+
+                const itemsContainer = document.getElementById(accordionContainerId);
+                if (itemsContainer && itemsContainer.querySelectorAll('.accordion-item').length === 0) {
                     itemsContainer.innerHTML = `<div class="alert alert-info">${noItemsMessage}</div>`;
                 }
             } catch (error) { showStatus(`Error deleting ${type} <b>${name}</b>: ${error.message}`, true); }
