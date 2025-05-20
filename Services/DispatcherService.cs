@@ -396,10 +396,14 @@ public class DispatcherService
         // Validation already done by DynamicConfigService and RoutingService, but double check critical parts
         if (string.IsNullOrWhiteSpace(groupConfig.OrchestratorModelName) || !groupConfig.Models.Any())
         {
-            _logger.LogError("MoA group '{GroupName}' critically misconfigured.", groupName);
-            SetFinalFailureResponse(context, logEntry, "MoA group is misconfigured.");
+            _logger.LogError("MoA group '{GroupName}' critically misconfigured (missing orchestrator or agent models).", groupName);
+            SetFinalFailureResponse(context, logEntry, "MoA group is misconfigured: missing orchestrator or agent models.");
             await LogRequestAsync(logEntry);
             return;
+        }
+        if (groupConfig.Models.Count < 2) // As per Readme/UI, MoA typically expects at least 2 agents
+        {
+            _logger.LogWarning("MoA group '{GroupName}' has fewer than 2 agent models configured. Proceeding, but this might not be optimal.", groupName);
         }
 
         var agentTasks = groupConfig.Models.Select(agentModelId =>
@@ -417,79 +421,170 @@ public class DispatcherService
             var (success, body, agentName, statusCode, errMsg) = task.Result;
             if (success && body != null)
             {
-                agentResponses[agentName] = body;
-                _logger.LogInformation("MoA: Agent {AgentName} succeeded.", agentName);
+                try
+                {
+                    // Parse the agent's JSON response
+                    var agentJsonNode = JsonNode.Parse(body);
+                    // Extract the actual content (typical OpenAI compatible path)
+                    string? agentContent = agentJsonNode?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+
+                    if (agentContent != null)
+                    {
+                        agentResponses[agentName] = agentContent; // Store only the extracted content
+                        _logger.LogInformation("MoA: Agent {AgentName} succeeded. Content extracted.", agentName);
+                    }
+                    else
+                    {
+                        _logger.LogError("MoA: Agent {AgentName} succeeded but could not extract message content from response: {ResponseBody}", agentName, body.Substring(0, Math.Min(body.Length, 500)));
+                        failedAgentDetails.Add($"{agentName} (Status: {statusCode}, Error: Malformed response content or missing content field)");
+                    }
+                }
+                catch (JsonException jsonEx)
+                {
+                    _logger.LogError(jsonEx, "MoA: Agent {AgentName} response was not valid JSON: {ResponseBody}", agentName, body.Substring(0, Math.Min(body.Length, 500)));
+                    failedAgentDetails.Add($"{agentName} (Status: {statusCode}, Error: Invalid JSON response)");
+                }
             }
             else
             {
                 failedAgentDetails.Add($"{agentName} (Status: {statusCode}, Error: {errMsg})");
-                _logger.LogError("MoA: Agent {AgentName} failed.", agentName);
+                _logger.LogError("MoA: Agent {AgentName} failed. Status: {StatusCode}, Error: {ErrorMessage}", agentName, statusCode, errMsg);
             }
         }
 
         if (failedAgentDetails.Any())
         {
-            string failureMessage = $"MoA failed: Agent(s) [{string.Join("; ", failedAgentDetails)}] did not respond successfully.";
-            _logger.LogError("MoA workflow failed for {GroupName} due to agent failures.", groupName);
+            string failureMessage = $"MoA failed: Agent(s) [{string.Join("; ", failedAgentDetails)}] did not respond successfully or provide usable content.";
+            _logger.LogError("MoA workflow failed for {GroupName} due to agent failures: {FailureDetails}", groupName, string.Join("; ", failedAgentDetails));
             SetFinalFailureResponse(context, logEntry, failureMessage);
             logEntry.ErrorMessage = failureMessage;
             await LogRequestAsync(logEntry);
             return;
         }
+        if (!agentResponses.Any()) // Should be caught by failedAgentDetails, but as a safeguard
+        {
+            _logger.LogError("MoA workflow failed for {GroupName}: No successful agent responses with extractable content.", groupName);
+            SetFinalFailureResponse(context, logEntry, "MoA failed: No successful agent responses.");
+            logEntry.ErrorMessage = "MoA failed: No successful agent responses.";
+            await LogRequestAsync(logEntry);
+            return;
+        }
 
-        var orchestratorPromptBuilder = new StringBuilder();
-        orchestratorPromptBuilder.AppendLine("You are an expert orchestrator. Based on the original user query and the following responses from several specialist agents, synthesize a final, comprehensive, and accurate answer for the user.");
+        // --- Build Orchestrator Prompt ---
+        string systemPromptContent = "You are an expert orchestrator. Your task is to synthesize a final, comprehensive, and accurate answer for the user based on their original query and the responses provided by several specialist agents. Ensure your final answer directly addresses the user's original query, integrating the insights from the agents.";
+
         string userQueryContent = "Could not extract original user query.";
-        var originalJson = TryParseJson(originalRequestBody);
-        if (originalJson?["messages"] is JsonArray messages)
+        JsonNode? originalClientJson = TryParseJson(originalRequestBody); // Parse once for multiple uses
+
+        if (originalClientJson?["messages"] is JsonArray messages)
         {
             var lastUserMessage = messages.LastOrDefault(m => m?["role"]?.GetValue<string>() == "user");
             userQueryContent = lastUserMessage?["content"]?.GetValue<string>() ?? userQueryContent;
         }
-        else if (originalJson?["prompt"] is JsonNode promptNode)
+        else if (originalClientJson?["prompt"] is JsonNode promptNode) // For legacy completion
         {
-            userQueryContent = promptNode.GetValue<string>();
+            userQueryContent = promptNode.GetValue<string>() ?? userQueryContent;
         }
-        orchestratorPromptBuilder.AppendLine($"\n--- ORIGINAL USER QUERY ---\n{userQueryContent}");
-        orchestratorPromptBuilder.AppendLine("\n--- AGENT RESPONSES ---");
+
+        var userPromptForOrchestratorBuilder = new StringBuilder();
+        userPromptForOrchestratorBuilder.AppendLine($"--- ORIGINAL USER QUERY ---\n{userQueryContent}");
+        userPromptForOrchestratorBuilder.AppendLine("\n--- AGENT RESPONSES ---");
         foreach (var ar in agentResponses)
         {
-            orchestratorPromptBuilder.AppendLine($"\nAgent [{ar.Key}]:\n{ar.Value}");
+            userPromptForOrchestratorBuilder.AppendLine($"\nAgent [{ar.Key}]:\n{ar.Value}");
         }
-        orchestratorPromptBuilder.AppendLine("\n--- FINAL SYNTHESIZED ANSWER ---");
+        userPromptForOrchestratorBuilder.AppendLine("\n--- FINAL SYNTHESIZED ANSWER ---"); // Instruction for orchestrator output placement
 
-        var orchestratorPayload = new JsonObject { ["model"] = groupConfig.OrchestratorModelName, ["messages"] = new JsonArray(new JsonObject { ["role"] = "user", ["content"] = orchestratorPromptBuilder.ToString() }) };
+        var orchestratorMessages = new JsonArray
+        {
+            new JsonObject { ["role"] = "system", ["content"] = systemPromptContent },
+            new JsonObject { ["role"] = "user", ["content"] = userPromptForOrchestratorBuilder.ToString() }
+        };
+
+        var orchestratorPayload = new JsonObject
+        {
+            // The "model" field here is the logical model name defined in the proxy's config.
+            // ExecuteSingleModelRequestAsync will resolve it to the backend-specific model name if necessary.
+            ["model"] = groupConfig.OrchestratorModelName,
+            ["messages"] = orchestratorMessages
+        };
+
         if (clientRequestsStreaming)
+        {
             orchestratorPayload["stream"] = true;
+        }
+
+        // Attempt to pass through temperature and max_tokens from the original client request
+        if (originalClientJson != null)
+        {
+            if (originalClientJson["temperature"] is JsonNode tempNode && (tempNode.GetValueKind() == JsonValueKind.Number))
+            {
+                orchestratorPayload["temperature"] = tempNode.DeepClone();
+            }
+            if (originalClientJson["max_tokens"] is JsonNode maxTokensNode && (maxTokensNode.GetValueKind() == JsonValueKind.Number))
+            {
+                orchestratorPayload["max_tokens"] = maxTokensNode.DeepClone();
+            }
+            // You could add other passthrough parameters here (e.g., top_p, presence_penalty)
+        }
+
         string orchestratorRequestBody = orchestratorPayload.ToJsonString();
 
-        logEntry.UpstreamRequestBody = orchestratorRequestBody;
-        logEntry.EffectiveModelName = groupConfig.OrchestratorModelName;
-        _logger.LogInformation("MoA: Calling orchestrator {OrchestratorModel}. Client streaming: {ClientStreaming}", groupConfig.OrchestratorModelName, clientRequestsStreaming);
+        logEntry.UpstreamRequestBody = orchestratorRequestBody; // Log the request to the orchestrator
+        logEntry.EffectiveModelName = groupConfig.OrchestratorModelName; // Log the orchestrator model as the effective one for this step
+        _logger.LogInformation("MoA: Calling orchestrator {OrchestratorModel}. Client streaming: {ClientStreaming}. Orchestrator Request Body (first 500 chars): {BodyStart}",
+            groupConfig.OrchestratorModelName, clientRequestsStreaming, orchestratorRequestBody.Substring(0, Math.Min(orchestratorRequestBody.Length, 500)));
 
         var (orchSuccess, orchBody, orchStatusCode, orchError, orchBackendName) = await ExecuteSingleModelRequestAsync(
-            groupConfig.OrchestratorModelName!, orchestratorRequestBody, clientRequestsStreaming, clientRequestPath, clientRequestMethod, logEntry);
+            groupConfig.OrchestratorModelName!, // OrchestratorModelName is validated not to be null
+            orchestratorRequestBody,
+            clientRequestsStreaming, // Orchestrator call respects client's streaming preference
+            clientRequestPath,
+            clientRequestMethod,
+            logEntry);
 
-        logEntry.UpstreamBackendName = orchBackendName;
-        logEntry.UpstreamStatusCode = orchStatusCode;
+        logEntry.UpstreamBackendName = orchBackendName; // Backend used for the orchestrator
+        logEntry.UpstreamStatusCode = orchStatusCode;   // Status code from the orchestrator's backend
 
         if (orchSuccess && orchBody != null)
         {
-            _logger.LogInformation("MoA: Orchestrator {OrchestratorModel} successful. Relaying.", groupConfig.OrchestratorModelName);
-            using var tempOrchResponse = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(orchBody, Encoding.UTF8, "application/json") };
-            var (relayCompleted, internalError, finalOrchBody) = await RelayResponseAsync(context, tempOrchResponse, clientRequestsStreaming, groupConfig.OrchestratorModelName!, _logger);
-            logEntry.UpstreamResponseBody = finalOrchBody?.Length > 200000 ? finalOrchBody.Substring(0, 200000) + "..." : finalOrchBody;
-            logEntry.WasSuccess = relayCompleted && !internalError;
-            logEntry.ErrorMessage = internalError ? "Orchestrator response had internal error." : (relayCompleted ? null : "Relay failed.");
+            _logger.LogInformation("MoA: Orchestrator {OrchestratorModel} successful. Relaying response to client.", groupConfig.OrchestratorModelName);
+
+            // For relaying, we need to construct a temporary HttpResponseMessage
+            // as ExecuteSingleModelRequestAsync returns the body as a string.
+            // The RelayResponseAsync expects an HttpResponseMessage.
+            // We assume the orchestrator (if successful) returns JSON or text/event-stream.
+            HttpStatusCode responseStatusCodeToRelay = orchStatusCode.HasValue ? (HttpStatusCode)orchStatusCode.Value : HttpStatusCode.OK;
+            if (responseStatusCodeToRelay == HttpStatusCode.NoContent)
+                responseStatusCodeToRelay = HttpStatusCode.OK; // Avoid issues with NoContent and streaming
+
+            using var tempOrchResponse = new HttpResponseMessage(responseStatusCodeToRelay);
+            string contentType = clientRequestsStreaming ? "text/event-stream" : "application/json";
+            tempOrchResponse.Content = new StringContent(orchBody, Encoding.UTF8, contentType);
+
+            // If the orchestrator was streaming, its body (orchBody) will contain the full concatenated stream.
+            // RelayResponseAsync will handle re-streaming this if clientRequestsStreaming is true.
+            var (relayCompleted, internalErrorDetectedInContent, finalOrchBodyForLog) = await RelayResponseAsync(
+                context,
+                tempOrchResponse,
+                clientRequestsStreaming,
+                groupConfig.OrchestratorModelName!, // For logging within RelayResponseAsync
+                _logger);
+
+            logEntry.UpstreamResponseBody = finalOrchBodyForLog?.Length > 200000 ? finalOrchBodyForLog.Substring(0, 200000) + "..." : finalOrchBodyForLog;
+            logEntry.WasSuccess = relayCompleted && !internalErrorDetectedInContent;
+            logEntry.ErrorMessage = internalErrorDetectedInContent ? "Orchestrator response contained an internal error pattern." : (relayCompleted ? null : "Relay of orchestrator response failed or was cancelled.");
         }
         else
         {
-            _logger.LogError("MoA: Orchestrator {OrchestratorModel} failed. Error: {Error}", groupConfig.OrchestratorModelName, orchError);
-            SetFinalFailureResponse(context, logEntry, $"MoA Orchestrator {groupConfig.OrchestratorModelName} failed: {orchError}");
-            logEntry.ErrorMessage = $"MoA Orchestrator Failure: {orchError}";
-            logEntry.UpstreamResponseBody = orchBody;
+            _logger.LogError("MoA: Orchestrator {OrchestratorModel} failed. Status: {StatusCode}, Error: {Error}, Body: {Body}",
+                groupConfig.OrchestratorModelName, orchStatusCode, orchError, orchBody?.Substring(0, Math.Min(orchBody?.Length ?? 0, 500)));
+            string finalErrorMessage = $"MoA Orchestrator '{groupConfig.OrchestratorModelName}' failed: {orchError ?? "Unknown error"} (Status: {orchStatusCode?.ToString() ?? "N/A"})";
+            SetFinalFailureResponse(context, logEntry, finalErrorMessage);
+            logEntry.ErrorMessage = finalErrorMessage;
+            logEntry.UpstreamResponseBody = orchBody?.Length > 200000 ? orchBody.Substring(0, 200000) + "..." : orchBody;
         }
-        logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
+        logEntry.ProxyResponseStatusCode = context.Response.StatusCode; // Log the final status code sent to client
         await LogRequestAsync(logEntry);
     }
 
