@@ -589,13 +589,16 @@ public class DispatcherService
     }
 
     private async Task<bool> HandleSingleEffectiveModelDispatchAsync(
-        HttpContext context, ApiLogEntry logEntry, string effectiveModelName, ModelRoutingConfig modelConfig,
-        string originalRequestBody, bool clientRequestsStreaming, string clientRequestPath, string clientRequestMethod)
+    HttpContext context, ApiLogEntry logEntry, string effectiveModelName, ModelRoutingConfig modelConfig,
+    string originalRequestBody, // This is the full original request body string from the client
+    bool clientRequestsStreaming, string clientRequestPath, string clientRequestMethod)
     {
         _logger.LogInformation("Dispatching for effective model: {EffectiveModelName}. Client streaming: {ClientStreaming}", effectiveModelName, clientRequestsStreaming);
         logEntry.EffectiveModelName = effectiveModelName;
         List<BackendConfig> triedBackends = new();
         HttpResponseMessage? backendHttpResponse = null;
+
+        JsonNode? originalClientJsonNode = TryParseJson(originalRequestBody); // Parse original client request for parameters
 
         while (true) // Backend retry loop for this effectiveModelName
         {
@@ -609,35 +612,93 @@ public class DispatcherService
             triedBackends.Add(selectedBackend);
             logEntry.UpstreamBackendName = selectedBackend.Name;
 
-            if (!TryConstructUpstreamUri(selectedBackend.BaseUrl, GetBackendPathSuffix(clientRequestPath)!, out Uri? upstreamUri, out string uriError))
+            string? backendPathSuffix = GetBackendPathSuffix(clientRequestPath);
+            if (backendPathSuffix == null) // Should ideally not happen if request path was validated earlier
+            {
+                _logger.LogError("Invalid backend path suffix for request path {ClientRequestPath} with effective model {EffectiveModelName}.", clientRequestPath, effectiveModelName);
+                logEntry.ErrorMessage = $"Internal error: Invalid backend path for {effectiveModelName}.";
+                // This is an internal error, probably shouldn't retry with another backend for the same reason.
+                // Consider how to handle this. For now, we'll continue, but it will likely fail URI construction.
+                // A more robust solution might be to return false or throw an exception earlier.
+                continue;
+            }
+
+            if (!TryConstructUpstreamUri(selectedBackend.BaseUrl, backendPathSuffix, out Uri? upstreamUri, out string uriError))
             {
                 _logger.LogError("URI error for backend {BackendName} of {EffectiveModelName}: {Error}", selectedBackend.Name, effectiveModelName, uriError);
                 logEntry.ErrorMessage = $"URI error for {selectedBackend.Name}: {uriError}";
-                continue;
+                continue; // Try next backend
             }
             logEntry.UpstreamUrl = upstreamUri!.ToString();
 
-            string outgoingRequestBody = originalRequestBody;
-            string modelNameToLogForBackend = effectiveModelName;
-            if (!string.IsNullOrWhiteSpace(selectedBackend.BackendModelName))
+            string finalOutgoingRequestBody;
+            try
             {
-                modelNameToLogForBackend = selectedBackend.BackendModelName;
-                if (!TryModifyRequestBodyModel(originalRequestBody, selectedBackend.BackendModelName, out outgoingRequestBody))
+                // For direct model calls, the originalRequestBody contains the primary payload (e.g., messages).
+                // We'll parse it, apply passthrough parameters, then ensure 'model' and 'stream' are correct.
+                var payloadObject = JsonNode.Parse(originalRequestBody)?.AsObject();
+
+                if (payloadObject != null)
                 {
-                    _logger.LogWarning("Failed to modify body for backend-specific model {BackendSpecific} for {BackendName}.", selectedBackend.BackendModelName, selectedBackend.Name);
+                    // Apply passthrough parameters from the original client request.
+                    // originalClientJsonNode is the parsed version of originalRequestBody.
+                    ApplyPassthroughParameters(originalClientJsonNode, payloadObject);
+
+                    // CRITICAL: Explicitly set/override 'model' and 'stream' after passthrough.
+                    // This ensures proxy control over these essential parameters.
+                    if (!string.IsNullOrWhiteSpace(selectedBackend.BackendModelName))
+                    {
+                        payloadObject["model"] = selectedBackend.BackendModelName;
+                        _logger.LogDebug("Overriding model to backend-specific: '{BackendModelName}' for effective model '{EffectiveModelName}'", selectedBackend.BackendModelName, effectiveModelName);
+                    }
+                    else
+                    {
+                        // If no backend-specific model name, ensure the 'model' field reflects the effectiveModelName.
+                        payloadObject["model"] = effectiveModelName;
+                        _logger.LogDebug("Setting model to effective: '{EffectiveModelName}'", effectiveModelName);
+                    }
+
+                    if (clientRequestsStreaming)
+                    {
+                        payloadObject["stream"] = true;
+                        _logger.LogDebug("Setting stream to true for effective model '{EffectiveModelName}'", effectiveModelName);
+                    }
+                    else
+                    {
+                        // If not streaming, ensure 'stream' is false or removed.
+                        // Removing might be cleaner if the backend defaults to non-streaming.
+                        if (payloadObject.ContainsKey("stream"))
+                        {
+                            payloadObject.Remove("stream");
+                            _logger.LogDebug("Removing stream parameter for non-streaming call to effective model '{EffectiveModelName}'", effectiveModelName);
+                            // Alternatively: payloadObject["stream"] = false;
+                        }
+                    }
+                    finalOutgoingRequestBody = payloadObject.ToJsonString();
+                }
+                else
+                {
+                    _logger.LogWarning("Original request body for {EffectiveModelName} could not be parsed as a JSON object. Sending as is, parameter passthrough skipped.", effectiveModelName);
+                    finalOutgoingRequestBody = originalRequestBody; // Send original body if it wasn't a valid JSON object
                 }
             }
-            logEntry.UpstreamRequestBody = outgoingRequestBody;
+            catch (JsonException jsonEx)
+            {
+                _logger.LogError(jsonEx, "Error processing original request body for {EffectiveModelName} to apply parameters. Sending original body. Error: {JsonExMessage}", effectiveModelName, jsonEx.Message);
+                finalOutgoingRequestBody = originalRequestBody; // Fallback to original body on error
+            }
+
+            logEntry.UpstreamRequestBody = finalOutgoingRequestBody; // Log the actual body being sent
 
             var httpClient = _httpClientFactory.CreateClient(BackendClientName);
             using var upstreamRequest = new HttpRequestMessage(new HttpMethod(clientRequestMethod), upstreamUri)
             {
-                Content = new StringContent(outgoingRequestBody, Encoding.UTF8, "application/json")
+                Content = new StringContent(finalOutgoingRequestBody, Encoding.UTF8, "application/json")
             };
             upstreamRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-            _logger.LogInformation("Dispatching to {Backend} ({UpstreamUri}) for model {EffectiveModel} (using '{ModelForBackend}' for backend).",
-                selectedBackend.Name, upstreamUri, effectiveModelName, modelNameToLogForBackend);
+            _logger.LogInformation("Dispatching to {Backend} ({UpstreamUri}) for model {EffectiveModel}. Body (first 200): {BodyStart}",
+                selectedBackend.Name, upstreamUri, effectiveModelName, finalOutgoingRequestBody.Substring(0, Math.Min(finalOutgoingRequestBody.Length, 200)));
             try
             {
                 HttpCompletionOption completionOption = clientRequestsStreaming ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead;
@@ -654,22 +715,27 @@ public class DispatcherService
                     {
                         logEntry.ErrorMessage = $"Relay failed/cancelled for {selectedBackend.Name}.";
                         logEntry.WasSuccess = false;
-                        await LogRequestAsync(logEntry);
+                        // Don't await LogRequestAsync here if we are returning immediately due to client disconnect.
+                        // The log will be captured at the end of DispatchRequestAsync or if an exception occurs.
+                        // However, if this is the final attempt, it should be logged.
+                        // For now, we assume the main DispatchRequestAsync will handle final logging.
                         backendHttpResponse.Dispose();
-                        return true; // Return true as request processing ends here due to client disconnect
+                        return true; // Request processing ends here (e.g., client disconnected during stream)
                     }
                     if (internalError)
                     {
-                        _logger.LogWarning("Backend {BackendName} OK but content error. Retrying.", selectedBackend.Name);
+                        _logger.LogWarning("Backend {BackendName} OK but content error. Retrying with next backend.", selectedBackend.Name);
                         logEntry.ErrorMessage = $"Backend {selectedBackend.Name} OK but internal error. Body: {logEntry.UpstreamResponseBody ?? "N/A"}";
-                        logEntry.WasSuccess = false; // Mark this attempt as failed
+                        logEntry.WasSuccess = false; // Mark this specific backend attempt as failed
+                                                     // Log this attempt before trying next backend
+                                                     // await LogRequestAsync(logEntry); // Careful with multiple logs for one client request
                         backendHttpResponse.Dispose();
                         continue; // Try next backend
                     }
                     logEntry.WasSuccess = true;
                     logEntry.ErrorMessage = null;
                     logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
-                    await LogRequestAsync(logEntry);
+                    await LogRequestAsync(logEntry); // Successful attempt for this effective model
                     backendHttpResponse.Dispose();
                     return true; // Success for this effective model
                 }
@@ -682,42 +748,110 @@ public class DispatcherService
                     }
                     logEntry.ErrorMessage = $"Backend {selectedBackend.Name} error: {backendHttpResponse.StatusCode}. Body: {logEntry.UpstreamResponseBody ?? "N/A"}";
                     _logger.LogWarning("Backend {BackendName} returned {StatusCode} for {EffectiveModelName}.", selectedBackend.Name, backendHttpResponse.StatusCode, effectiveModelName);
+
                     if (IsRetryableError(backendHttpResponse.StatusCode))
                     {
                         backendHttpResponse.Dispose();
-                        continue;
-                    } // Try next backend
+                        // Log this attempt before trying next backend
+                        // await LogRequestAsync(logEntry); // Careful with multiple logs
+                        continue; // Try next backend
+                    }
 
                     // Non-retryable error from this backend, relay to client
                     await RelayResponseAsync(context, backendHttpResponse, false, selectedBackend.Name, _logger); // isStreaming false for error relay
                     logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
                     logEntry.WasSuccess = false;
-                    await LogRequestAsync(logEntry);
+                    await LogRequestAsync(logEntry); // Log the failed attempt that was relayed
                     backendHttpResponse.Dispose();
                     return true; // Request processing ends, even if with an error relayed
                 }
             }
-            catch (HttpRequestException ex) { _logger.LogError(ex, "HTTP exception for {BackendName}.", selectedBackend.Name); logEntry.ErrorMessage = $"HTTP Exc: {ex.Message}"; backendHttpResponse?.Dispose(); continue; }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "HTTP exception for {BackendName} during request to {EffectiveModelName}.", selectedBackend.Name, effectiveModelName);
+                logEntry.ErrorMessage = $"HTTP Exc: {ex.Message}";
+                backendHttpResponse?.Dispose();
+                // Log this attempt before trying next backend
+                // await LogRequestAsync(logEntry); // Careful with multiple logs
+                continue; // Try next backend
+            }
             catch (TaskCanceledException ex)
             {
                 if (context.RequestAborted.IsCancellationRequested)
                 {
-                    _logger.LogInformation("Client cancelled for {BackendName}.", selectedBackend.Name);
+                    _logger.LogInformation("Client cancelled request to {BackendName} for {EffectiveModelName}.", selectedBackend.Name, effectiveModelName);
                     logEntry.ErrorMessage = "Client cancelled.";
                     logEntry.WasSuccess = false;
-                    logEntry.ProxyResponseStatusCode = 499;
-                    _ = LogRequestAsync(logEntry);
+                    logEntry.ProxyResponseStatusCode = 499; // Client Closed Request
+                                                            // Log this attempt
+                                                            // await LogRequestAsync(logEntry); // Careful with multiple logs
                     backendHttpResponse?.Dispose();
-                    return true;
+                    return true; // Stop processing for this request
                 }
-                _logger.LogError(ex, "Timeout for {BackendName}.", selectedBackend.Name);
+                _logger.LogError(ex, "Timeout for {BackendName} during request to {EffectiveModelName}.", selectedBackend.Name, effectiveModelName);
                 logEntry.ErrorMessage = "Timeout.";
                 backendHttpResponse?.Dispose();
-                continue;
+                // Log this attempt before trying next backend
+                // await LogRequestAsync(logEntry); // Careful with multiple logs
+                continue; // Try next backend
             }
-            catch (Exception ex) { _logger.LogError(ex, "Unexpected error for {BackendName}.", selectedBackend.Name); logEntry.ErrorMessage = $"Dispatch Exc: {ex.Message}"; backendHttpResponse?.Dispose(); continue; }
-            finally { backendHttpResponse?.Dispose(); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error for {BackendName} during request to {EffectiveModelName}.", selectedBackend.Name, effectiveModelName);
+                logEntry.ErrorMessage = $"Dispatch Exc: {ex.Message}";
+                backendHttpResponse?.Dispose();
+                // Log this attempt before trying next backend
+                // await LogRequestAsync(logEntry); // Careful with multiple logs
+                continue; // Try next backend
+            }
+            finally
+            {
+                backendHttpResponse?.Dispose();
+            }
         }
+    }
+
+    private void ApplyPassthroughParameters(JsonNode? sourceClientJson, JsonObject targetPayload)
+    {
+        if (sourceClientJson == null || sourceClientJson.GetValueKind() != JsonValueKind.Object)
+        {
+            _logger.LogDebug("ApplyPassthroughParameters: Source client JSON is null or not an object. No parameters to apply.");
+            return;
+        }
+
+        var clientRequestObject = sourceClientJson.AsObject();
+
+        // Parameters explicitly managed by the proxy or that should not be blindly passed.
+        // 'model' and 'stream' are handled specifically after this method is called.
+        // 'messages' (or 'prompt' for legacy) is the core content and is constructed specifically.
+        var excludedParams = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "model",        // Handled by routing and BackendModelName
+            "stream",       // Handled by clientRequestsStreaming and isCallActuallyStreaming
+            "messages",     // Constructed specifically for agents/orchestrator or is the main content
+            "prompt",       // Legacy, also core content
+            // Add any other parameters you want the proxy to exclusively control or ignore from client.
+            // Example: "n" (number of completions) might be complex to handle consistently,
+            // especially with MoA, so you might choose to exclude it or handle it specially.
+            // "n",
+        };
+
+        _logger.LogDebug("ApplyPassthroughParameters: Starting to iterate client request properties.");
+        foreach (var property in clientRequestObject)
+        {
+            if (!excludedParams.Contains(property.Key))
+            {
+                // DeepClone is crucial to avoid shared references if the source node is complex
+                // or if targetPayload is modified elsewhere.
+                targetPayload[property.Key] = property.Value?.DeepClone();
+                _logger.LogDebug("Applying passthrough parameter '{ParamName}' with value: {ParamValue}", property.Key, property.Value?.ToJsonString() ?? "null");
+            }
+            else
+            {
+                _logger.LogDebug("Skipping excluded parameter '{ParamName}' from client request.", property.Key);
+            }
+        }
+        _logger.LogDebug("ApplyPassthroughParameters: Finished applying parameters.");
     }
 
     public async Task DispatchRequestAsync(HttpContext context)
