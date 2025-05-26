@@ -272,67 +272,129 @@ public class DispatcherService
     /// It always attempts to get the full response body.
     /// </summary>
     private async Task<(bool success, string? responseBody, int? statusCode, string? errorMessage, string? finalBackendName)>
-        ExecuteSingleModelRequestAsync(
-            string modelId,
-            string requestBodyPayload,
-            bool isCallActuallyStreaming, // How this specific call to backend should behave
-            string originalRequestPath,
-            string originalRequestMethod,
-            ApiLogEntry mainLogEntryForContext) // For context, not direct modification
+    ExecuteSingleModelRequestAsync(
+        string modelId,                         // The logical model ID (e.g., "gpt-4-proxy", "agent-phi3")
+        string baseRequestBodyPayload,          // The minimal JSON payload (e.g., just messages for an agent/orchestrator)
+        bool isCallActuallyStreaming,           // Whether this specific backend call should be streaming
+        string originalRequestPath,             // e.g., "/v1/chat/completions"
+        string originalRequestMethod,           // e.g., "POST"
+        ApiLogEntry mainLogEntryForContext,    // For contextual logging, not direct modification here
+        JsonNode? originalClientJsonNodeForParams) // Parsed JSON of the *original client request* for passthrough params
     {
         var modelStopwatch = Stopwatch.StartNew();
-        _logger.LogInformation("[SubCall] Executing for: {ModelId}. StreamingHint: {IsCallStreaming}", modelId, isCallActuallyStreaming);
+        _logger.LogInformation("[SubCall] Executing for model ID: {ModelId}. Streaming for this call: {IsCallStreaming}", modelId, isCallActuallyStreaming);
 
         if (!_routingService.TryGetModelRouting(modelId, out ModelRoutingConfig? modelConfig) || modelConfig == null)
         {
-            _logger.LogError("[SubCall] No config for {ModelId}.", modelId);
-            return (false, null, null, $"No model configuration for {modelId}", null);
+            _logger.LogError("[SubCall] No model configuration found for model ID: {ModelId}.", modelId);
+            return (false, null, null, $"No model configuration for '{modelId}'", null);
         }
 
         string? backendPathSuffix = GetBackendPathSuffix(originalRequestPath);
         if (backendPathSuffix == null)
         {
-            _logger.LogError("[SubCall] Invalid path for {ModelId}: {Path}", modelId, originalRequestPath);
-            return (false, null, null, "Invalid path for sub-call", null);
+            _logger.LogError("[SubCall] Invalid backend path suffix for request path {OriginalRequestPath} with model ID {ModelId}.", originalRequestPath, modelId);
+            return (false, null, null, "Internal error: Invalid backend path for sub-call", null);
         }
 
         List<BackendConfig> triedBackends = new();
         HttpResponseMessage? backendResponse = null;
+        string? lastAttemptedBackendName = null; // For logging final failure
 
         while (true) // Backend retry loop for this modelId
         {
             var (selectedBackend, apiKey) = _routingService.GetNextBackendAndKeyForModel(modelConfig, modelId, triedBackends);
             if (selectedBackend == null || string.IsNullOrEmpty(apiKey))
             {
-                _logger.LogWarning("[SubCall] All backends exhausted for {ModelId}.", modelId);
-                return (false, null, null, $"All backends failed for {modelId}", null);
+                _logger.LogWarning("[SubCall] All backends exhausted for model ID {ModelId}. Last tried: {LastBackend}", modelId, lastAttemptedBackendName ?? "None");
+                return (false, null, null, $"All backends failed for model '{modelId}'", lastAttemptedBackendName);
             }
             triedBackends.Add(selectedBackend);
-            string currentBackendName = selectedBackend.Name;
+            lastAttemptedBackendName = selectedBackend.Name; // Keep track of the last backend name tried
+            string currentBackendName = selectedBackend.Name; // Use a local variable for clarity in this iteration
 
             if (!TryConstructUpstreamUri(selectedBackend.BaseUrl, backendPathSuffix, out Uri? upstreamUri, out string uriError))
             {
-                _logger.LogError("[SubCall] URI error for {BackendName} of {ModelId}: {Error}", currentBackendName, modelId, uriError);
-                continue;
+                _logger.LogError("[SubCall] URI construction error for backend '{BackendName}' of model '{ModelId}': {Error}", currentBackendName, modelId, uriError);
+                // Log this attempt to mainLogEntryForContext if it's the first/only one for this sub-call
+                // For simplicity, we'll let the overall failure message cover this.
+                continue; // Try next backend
             }
 
-            string outgoingRequestBody = requestBodyPayload;
-            if (!string.IsNullOrWhiteSpace(selectedBackend.BackendModelName) &&
-                !TryModifyRequestBodyModel(requestBodyPayload, selectedBackend.BackendModelName, out outgoingRequestBody))
+            string finalOutgoingRequestBody;
+            try
             {
-                _logger.LogWarning("[SubCall] Failed to modify body for backend-specific model {BackendSpecific} for {BackendName}.", selectedBackend.BackendModelName, currentBackendName);
+                var payloadObject = JsonNode.Parse(baseRequestBodyPayload)?.AsObject();
+                if (payloadObject == null)
+                {
+                    _logger.LogWarning("[SubCall] Base request body for model '{ModelId}' could not be parsed as a JSON object: {BaseBodyPreview}. Proceeding with raw base body.",
+                        modelId, baseRequestBodyPayload.Substring(0, Math.Min(baseRequestBodyPayload.Length, 100)));
+                    finalOutgoingRequestBody = baseRequestBodyPayload; // This might be problematic if it's not valid JSON for the backend
+                }
+                else // Successfully parsed base payload
+                {
+                    // 1. Apply passthrough parameters from the original client request
+                    ApplyPassthroughParameters(originalClientJsonNodeForParams, payloadObject);
+
+                    // 2. Explicitly set/override the 'model' field for the target backend
+                    if (!string.IsNullOrWhiteSpace(selectedBackend.BackendModelName))
+                    {
+                        payloadObject["model"] = selectedBackend.BackendModelName;
+                        _logger.LogDebug("[SubCall] Model for backend '{BackendName}' set to backend-specific: '{BackendModelName}' (original logical ID was '{ModelId}')",
+                            currentBackendName, selectedBackend.BackendModelName, modelId);
+                    }
+                    else
+                    {
+                        // If no backend-specific model name, use the logical modelId this function was called with.
+                        // This ensures the 'model' field in the payload is the one intended for this sub-call.
+                        payloadObject["model"] = modelId;
+                        _logger.LogDebug("[SubCall] Model for backend '{BackendName}' set to logical ID: '{ModelId}' (no backend-specific override)",
+                           currentBackendName, modelId);
+                    }
+
+                    // 3. Explicitly set/override the 'stream' field for this specific call
+                    if (isCallActuallyStreaming)
+                    {
+                        payloadObject["stream"] = true;
+                        _logger.LogDebug("[SubCall] 'stream' parameter set to true for model '{ModelId}' call to backend '{BackendName}'", modelId, currentBackendName);
+                    }
+                    else
+                    {
+                        // If not streaming for this specific call (e.g., MoA agent calls), ensure 'stream' is false or removed.
+                        if (payloadObject.ContainsKey("stream"))
+                        {
+                            payloadObject.Remove("stream");
+                            _logger.LogDebug("[SubCall] 'stream' parameter removed for non-streaming call to model '{ModelId}' for backend '{BackendName}'", modelId, currentBackendName);
+                            // Alternatively: payloadObject["stream"] = false;
+                        }
+                    }
+                    finalOutgoingRequestBody = payloadObject.ToJsonString();
+                }
+            }
+            catch (JsonException jsonEx)
+            {
+                _logger.LogError(jsonEx, "[SubCall] Error processing/parsing base request body for model '{ModelId}' to apply parameters. Base body preview: {BaseBodyPreview}. Error: {JsonExMessage}",
+                    modelId, baseRequestBodyPayload.Substring(0, Math.Min(baseRequestBodyPayload.Length, 100)), jsonEx.Message);
+                // Decide if to proceed with raw baseRequestBodyPayload or fail.
+                // Proceeding with raw might be risky if it's not what the backend expects.
+                // For now, let's consider this a failure for this backend attempt.
+                continue; // Try next backend, as payload construction failed.
             }
 
             var httpClient = _httpClientFactory.CreateClient(BackendClientName);
             using var upstreamRequest = new HttpRequestMessage(new HttpMethod(originalRequestMethod), upstreamUri)
             {
-                Content = new StringContent(outgoingRequestBody, Encoding.UTF8, "application/json")
+                Content = new StringContent(finalOutgoingRequestBody, Encoding.UTF8, "application/json")
             };
             upstreamRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-            _logger.LogInformation("[SubCall] Dispatching to {Backend} for {ModelId}. URI: {UpstreamUri}", currentBackendName, modelId, upstreamUri);
+            _logger.LogInformation("[SubCall] Dispatching to backend '{BackendName}' for model '{ModelId}'. URI: {UpstreamUri}. Body (first 200 chars): {BodyStart}",
+                currentBackendName, modelId, upstreamUri, finalOutgoingRequestBody.Substring(0, Math.Min(finalOutgoingRequestBody.Length, 200)));
+
             try
             {
+                // Use CancellationToken.None for sub-calls for now. If you want to propagate client cancellation,
+                // you'd need to pass HttpContext.RequestAborted here.
                 HttpCompletionOption completionOption = isCallActuallyStreaming ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead;
                 backendResponse = await httpClient.SendAsync(upstreamRequest, completionOption, CancellationToken.None);
 
@@ -341,10 +403,9 @@ public class DispatcherService
 
                 if (isCallActuallyStreaming && backendResponse.IsSuccessStatusCode)
                 {
-                    // For a streaming call that is successful, we need to read the stream to get the full content.
-                    // We'll use a MemoryStream to buffer it.
+                    // For a streaming call that is successful, read the stream to get the full content.
                     using var memoryStream = new MemoryStream();
-                    await backendResponse.Content.CopyToAsync(memoryStream);
+                    await backendResponse.Content.CopyToAsync(memoryStream, CancellationToken.None);
                     memoryStream.Position = 0;
                     using var reader = new StreamReader(memoryStream, Encoding.UTF8);
                     responseBodyContent = await reader.ReadToEndAsync();
@@ -358,31 +419,40 @@ public class DispatcherService
                 {
                     if (ContainsApplicationLevelError(responseBodyContent ?? "", currentBackendName, _logger))
                     {
-                        _logger.LogWarning("[SubCall] {ModelId} backend {BackendName} OK but content error.", modelId, currentBackendName);
-                        backendResponse.Dispose();
-                        continue;
+                        _logger.LogWarning("[SubCall] Model '{ModelId}' call to backend '{BackendName}' returned HTTP OK but content indicates an application-level error. Retrying with next backend.", modelId, currentBackendName);
+                        backendResponse.Dispose(); // Dispose before continuing
+                        continue; // Try next backend
                     }
-                    _logger.LogInformation("[SubCall] {ModelId} backend {BackendName} success. Status: {StatusCode}. Took: {ElapsedMs}ms", modelId, currentBackendName, currentStatusCode, modelStopwatch.ElapsedMilliseconds);
+                    _logger.LogInformation("[SubCall] Model '{ModelId}' call to backend '{BackendName}' succeeded. Status: {StatusCode}. Took: {ElapsedMs}ms", modelId, currentBackendName, currentStatusCode, modelStopwatch.ElapsedMilliseconds);
                     return (true, responseBodyContent, currentStatusCode, null, currentBackendName);
                 }
-                else
+                else // Non-success HTTP status from backend
                 {
-                    _logger.LogWarning("[SubCall] {ModelId} backend {BackendName} failed. Status: {StatusCode}. Body: {Body}", modelId, currentBackendName, currentStatusCode, responseBodyContent?.Substring(0, Math.Min(responseBodyContent.Length, 200)));
+                    _logger.LogWarning("[SubCall] Model '{ModelId}' call to backend '{BackendName}' failed. Status: {StatusCode}. Response body (first 200 chars): {ResponseBodyPreview}",
+                        modelId, currentBackendName, currentStatusCode, responseBodyContent?.Substring(0, Math.Min(responseBodyContent.Length, 200)));
                     if (IsRetryableError(backendResponse.StatusCode))
                     {
-                        backendResponse.Dispose();
-                        continue;
+                        backendResponse.Dispose(); // Dispose before continuing
+                        continue; // Try next backend (retryable HTTP error)
                     }
-                    return (false, responseBodyContent, currentStatusCode, $"Non-retryable error {currentStatusCode}", currentBackendName);
+                    // Non-retryable HTTP error for this backend
+                    return (false, responseBodyContent, currentStatusCode, $"Non-retryable HTTP error {currentStatusCode} from backend '{currentBackendName}'", currentBackendName);
                 }
             }
             catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException)
             {
-                _logger.LogError(ex, "[SubCall] Network/Timeout for {ModelId} backend {BackendName}.", modelId, currentBackendName);
-                backendResponse?.Dispose();
-                continue;
+                // Check if TaskCanceledException was due to client abort if HttpContext.RequestAborted was passed.
+                // For CancellationToken.None, it's likely a timeout from HttpClient.
+                _logger.LogError(ex, "[SubCall] Network error or timeout for model '{ModelId}' call to backend '{BackendName}'.", modelId, currentBackendName);
+                backendResponse?.Dispose(); // Ensure disposal on exception
+                continue; // Try next backend
             }
-            finally { backendResponse?.Dispose(); }
+            finally
+            {
+                // Ensure backendResponse is disposed if it was created and not already disposed.
+                // The using statement for upstreamRequest handles its disposal.
+                backendResponse?.Dispose();
+            }
         }
     }
 
@@ -393,7 +463,6 @@ public class DispatcherService
         _logger.LogInformation("Initiating MoA workflow for group: {GroupName}", groupName);
         logEntry.EffectiveModelName = $"MoA_Group_{groupName}"; // Mark as MoA
 
-        // Validation already done by DynamicConfigService and RoutingService, but double check critical parts
         if (string.IsNullOrWhiteSpace(groupConfig.OrchestratorModelName) || !groupConfig.Models.Any())
         {
             _logger.LogError("MoA group '{GroupName}' critically misconfigured (missing orchestrator or agent models).", groupName);
@@ -401,15 +470,42 @@ public class DispatcherService
             await LogRequestAsync(logEntry);
             return;
         }
-        if (groupConfig.Models.Count < 2) // As per Readme/UI, MoA typically expects at least 2 agents
+        if (groupConfig.Models.Count < 1) // Technically MoA needs agents. Readme suggests min 2.
         {
-            _logger.LogWarning("MoA group '{GroupName}' has fewer than 2 agent models configured. Proceeding, but this might not be optimal.", groupName);
+            _logger.LogWarning("MoA group '{GroupName}' has no agent models configured. This will likely fail or produce no result.", groupName);
+            // Depending on strictness, you might want to fail here too.
+            // For now, let it proceed, it will likely fail when agentTasks is empty or all fail.
         }
 
+        JsonNode? originalClientJsonNode = TryParseJson(originalRequestBody); // Parse original client request once
+
         var agentTasks = groupConfig.Models.Select(agentModelId =>
-            ExecuteSingleModelRequestAsync(agentModelId, originalRequestBody, false, clientRequestPath, clientRequestMethod, logEntry)
-                .ContinueWith(t => (t.Result.success, t.Result.responseBody, agentModelId, t.Result.statusCode, t.Result.errorMessage))
-        ).ToList();
+        {
+            // Construct the base request body for the agent.
+            // For agents, we typically send the original client's messages array.
+            // The 'model' field will be set by ExecuteSingleModelRequestAsync.
+            // Other parameters will be overlaid by ApplyPassthroughParameters within ExecuteSingleModelRequestAsync.
+            var agentBasePayloadObject = new JsonObject();
+            if (originalClientJsonNode?["messages"] is JsonArray clientMessages)
+            {
+                agentBasePayloadObject["messages"] = clientMessages.DeepClone(); // Agents get the full original message history
+            }
+            else if (originalClientJsonNode?["prompt"] is JsonNode clientPrompt) // Handle legacy completion
+            {
+                agentBasePayloadObject["prompt"] = clientPrompt.DeepClone();
+            }
+            // If agents need other specific base parameters not from client, add them here.
+
+            return ExecuteSingleModelRequestAsync(
+                  agentModelId,
+                  agentBasePayloadObject.ToJsonString(),
+                  false, // Agents are non-streaming for MoA
+                  clientRequestPath,
+                  clientRequestMethod,
+                  logEntry,
+                  originalClientJsonNode) // Pass parsed original client JSON
+              .ContinueWith(t => (t.Result.success, t.Result.responseBody, agentModelId, t.Result.statusCode, t.Result.errorMessage));
+        }).ToList();
 
         await Task.WhenAll(agentTasks);
 
@@ -423,19 +519,22 @@ public class DispatcherService
             {
                 try
                 {
-                    // Parse the agent's JSON response
                     var agentJsonNode = JsonNode.Parse(body);
-                    // Extract the actual content (typical OpenAI compatible path)
                     string? agentContent = agentJsonNode?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+                    // For legacy completion responses, the content might be in choices[0].text
+                    if (agentContent == null && agentJsonNode?["choices"]?[0]?["text"] is JsonNode textNode)
+                    {
+                        agentContent = textNode.GetValue<string>();
+                    }
 
                     if (agentContent != null)
                     {
-                        agentResponses[agentName] = agentContent; // Store only the extracted content
+                        agentResponses[agentName] = agentContent;
                         _logger.LogInformation("MoA: Agent {AgentName} succeeded. Content extracted.", agentName);
                     }
                     else
                     {
-                        _logger.LogError("MoA: Agent {AgentName} succeeded but could not extract message content from response: {ResponseBody}", agentName, body.Substring(0, Math.Min(body.Length, 500)));
+                        _logger.LogError("MoA: Agent {AgentName} succeeded but could not extract message/text content from response: {ResponseBody}", agentName, body.Substring(0, Math.Min(body.Length, 500)));
                         failedAgentDetails.Add($"{agentName} (Status: {statusCode}, Error: Malformed response content or missing content field)");
                     }
                 }
@@ -452,20 +551,14 @@ public class DispatcherService
             }
         }
 
-        if (failedAgentDetails.Any())
+        if (failedAgentDetails.Any() || !agentResponses.Any())
         {
-            string failureMessage = $"MoA failed: Agent(s) [{string.Join("; ", failedAgentDetails)}] did not respond successfully or provide usable content.";
-            _logger.LogError("MoA workflow failed for {GroupName} due to agent failures: {FailureDetails}", groupName, string.Join("; ", failedAgentDetails));
+            string failureMessage = !agentResponses.Any()
+                ? "MoA failed: No successful agent responses with extractable content."
+                : $"MoA failed: Agent(s) [{string.Join("; ", failedAgentDetails)}] did not respond successfully or provide usable content.";
+            _logger.LogError("MoA workflow failed for {GroupName}: {FailureDetails}", groupName, failureMessage);
             SetFinalFailureResponse(context, logEntry, failureMessage);
             logEntry.ErrorMessage = failureMessage;
-            await LogRequestAsync(logEntry);
-            return;
-        }
-        if (!agentResponses.Any()) // Should be caught by failedAgentDetails, but as a safeguard
-        {
-            _logger.LogError("MoA workflow failed for {GroupName}: No successful agent responses with extractable content.", groupName);
-            SetFinalFailureResponse(context, logEntry, "MoA failed: No successful agent responses.");
-            logEntry.ErrorMessage = "MoA failed: No successful agent responses.";
             await LogRequestAsync(logEntry);
             return;
         }
@@ -474,14 +567,13 @@ public class DispatcherService
         string systemPromptContent = "You are an expert orchestrator. Your task is to synthesize a final, comprehensive, and accurate answer for the user based on their original query and the responses provided by several specialist agents. Ensure your final answer directly addresses the user's original query, integrating the insights from the agents.";
 
         string userQueryContent = "Could not extract original user query.";
-        JsonNode? originalClientJson = TryParseJson(originalRequestBody); // Parse once for multiple uses
-
-        if (originalClientJson?["messages"] is JsonArray messages)
+        // Use the already parsed originalClientJsonNode
+        if (originalClientJsonNode?["messages"] is JsonArray messages)
         {
             var lastUserMessage = messages.LastOrDefault(m => m?["role"]?.GetValue<string>() == "user");
             userQueryContent = lastUserMessage?["content"]?.GetValue<string>() ?? userQueryContent;
         }
-        else if (originalClientJson?["prompt"] is JsonNode promptNode) // For legacy completion
+        else if (originalClientJsonNode?["prompt"] is JsonNode promptNode)
         {
             userQueryContent = promptNode.GetValue<string>() ?? userQueryContent;
         }
@@ -493,82 +585,77 @@ public class DispatcherService
         {
             userPromptForOrchestratorBuilder.AppendLine($"\nAgent [{ar.Key}]:\n{ar.Value}");
         }
-        userPromptForOrchestratorBuilder.AppendLine("\n--- FINAL SYNTHESIZED ANSWER ---"); // Instruction for orchestrator output placement
+        userPromptForOrchestratorBuilder.AppendLine("\n--- FINAL SYNTHESIZED ANSWER ---");
 
         var orchestratorMessages = new JsonArray
-        {
-            new JsonObject { ["role"] = "system", ["content"] = systemPromptContent },
-            new JsonObject { ["role"] = "user", ["content"] = userPromptForOrchestratorBuilder.ToString() }
-        };
+    {
+        new JsonObject { ["role"] = "system", ["content"] = systemPromptContent },
+        new JsonObject { ["role"] = "user", ["content"] = userPromptForOrchestratorBuilder.ToString() }
+    };
 
-        var orchestratorPayload = new JsonObject
+        // Base payload for orchestrator. 'model', 'stream', and other passthrough parameters
+        // will be handled by ExecuteSingleModelRequestAsync.
+        var orchestratorBasePayloadObject = new JsonObject
         {
-            // The "model" field here is the logical model name defined in the proxy's config.
-            // ExecuteSingleModelRequestAsync will resolve it to the backend-specific model name if necessary.
-            ["model"] = groupConfig.OrchestratorModelName,
             ["messages"] = orchestratorMessages
         };
+        string orchestratorBaseRequestBody = orchestratorBasePayloadObject.ToJsonString();
 
-        if (clientRequestsStreaming)
-        {
-            orchestratorPayload["stream"] = true;
-        }
-
-        // Attempt to pass through temperature and max_tokens from the original client request
-        if (originalClientJson != null)
-        {
-            if (originalClientJson["temperature"] is JsonNode tempNode && (tempNode.GetValueKind() == JsonValueKind.Number))
-            {
-                orchestratorPayload["temperature"] = tempNode.DeepClone();
-            }
-            if (originalClientJson["max_tokens"] is JsonNode maxTokensNode && (maxTokensNode.GetValueKind() == JsonValueKind.Number))
-            {
-                orchestratorPayload["max_tokens"] = maxTokensNode.DeepClone();
-            }
-            // You could add other passthrough parameters here (e.g., top_p, presence_penalty)
-        }
-
-        string orchestratorRequestBody = orchestratorPayload.ToJsonString();
-
-        logEntry.UpstreamRequestBody = orchestratorRequestBody; // Log the request to the orchestrator
-        logEntry.EffectiveModelName = groupConfig.OrchestratorModelName; // Log the orchestrator model as the effective one for this step
-        _logger.LogInformation("MoA: Calling orchestrator {OrchestratorModel}. Client streaming: {ClientStreaming}. Orchestrator Request Body (first 500 chars): {BodyStart}",
-            groupConfig.OrchestratorModelName, clientRequestsStreaming, orchestratorRequestBody.Substring(0, Math.Min(orchestratorRequestBody.Length, 500)));
+        // logEntry.UpstreamRequestBody will be set by ExecuteSingleModelRequestAsync with the final body
+        logEntry.EffectiveModelName = groupConfig.OrchestratorModelName;
+        _logger.LogInformation("MoA: Preparing to call orchestrator {OrchestratorModel}. Client streaming: {ClientStreaming}",
+            groupConfig.OrchestratorModelName, clientRequestsStreaming);
 
         var (orchSuccess, orchBody, orchStatusCode, orchError, orchBackendName) = await ExecuteSingleModelRequestAsync(
-            groupConfig.OrchestratorModelName!, // OrchestratorModelName is validated not to be null
-            orchestratorRequestBody,
-            clientRequestsStreaming, // Orchestrator call respects client's streaming preference
+            groupConfig.OrchestratorModelName!,
+            orchestratorBaseRequestBody, // Send the base payload (messages only)
+            clientRequestsStreaming,     // Orchestrator call respects client's streaming preference
             clientRequestPath,
             clientRequestMethod,
-            logEntry);
+            logEntry,
+            originalClientJsonNode);     // Pass parsed original client JSON for passthrough parameter application
 
-        logEntry.UpstreamBackendName = orchBackendName; // Backend used for the orchestrator
-        logEntry.UpstreamStatusCode = orchStatusCode;   // Status code from the orchestrator's backend
+        // The final orchestrator request body (with passthrough params) is logged within ExecuteSingleModelRequestAsync.
+        // If you need to update logEntry.UpstreamRequestBody here with the *final* body, you'd need
+        // ExecuteSingleModelRequestAsync to return it, or reconstruct it here.
+        // For now, we assume the log within ExecuteSingleModelRequestAsync is sufficient for the sent body.
+
+        logEntry.UpstreamBackendName = orchBackendName;
+        logEntry.UpstreamStatusCode = orchStatusCode;
 
         if (orchSuccess && orchBody != null)
         {
             _logger.LogInformation("MoA: Orchestrator {OrchestratorModel} successful. Relaying response to client.", groupConfig.OrchestratorModelName);
 
-            // For relaying, we need to construct a temporary HttpResponseMessage
-            // as ExecuteSingleModelRequestAsync returns the body as a string.
-            // The RelayResponseAsync expects an HttpResponseMessage.
-            // We assume the orchestrator (if successful) returns JSON or text/event-stream.
             HttpStatusCode responseStatusCodeToRelay = orchStatusCode.HasValue ? (HttpStatusCode)orchStatusCode.Value : HttpStatusCode.OK;
-            if (responseStatusCodeToRelay == HttpStatusCode.NoContent)
-                responseStatusCodeToRelay = HttpStatusCode.OK; // Avoid issues with NoContent and streaming
+            if (responseStatusCodeToRelay == HttpStatusCode.NoContent && clientRequestsStreaming)
+            {
+                // Cannot stream a 204, so change to 200 if client expects a stream.
+                // Or, if orchBody is empty, perhaps don't stream.
+                // For now, assume if streaming was requested and orchestrator gave 204, it's an empty stream.
+                _logger.LogWarning("Orchestrator returned 204 NoContent but client requested streaming. Relaying as 200 OK with potentially empty stream body for {OrchestratorModel}.", groupConfig.OrchestratorModelName);
+                responseStatusCodeToRelay = HttpStatusCode.OK;
+            }
+            else if (responseStatusCodeToRelay == HttpStatusCode.NoContent)
+            {
+                _logger.LogInformation("Orchestrator returned 204 NoContent for {OrchestratorModel}.", groupConfig.OrchestratorModelName);
+            }
 
             using var tempOrchResponse = new HttpResponseMessage(responseStatusCodeToRelay);
-            string contentType = clientRequestsStreaming ? "text/event-stream" : "application/json";
-            tempOrchResponse.Content = new StringContent(orchBody, Encoding.UTF8, contentType);
+            string mediaType = clientRequestsStreaming ? "text/event-stream" : "application/json";
+            tempOrchResponse.Content = new StringContent(orchBody, Encoding.UTF8, mediaType);
+            // Add headers that might be expected for streaming if not already handled by RelayResponseAsync
+            if (clientRequestsStreaming)
+            {
+                tempOrchResponse.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
+                // Connection: keep-alive is usually handled by Kestrel/HttpClient
+            }
 
-            // If the orchestrator was streaming, its body (orchBody) will contain the full concatenated stream.
-            // RelayResponseAsync will handle re-streaming this if clientRequestsStreaming is true.
             var (relayCompleted, internalErrorDetectedInContent, finalOrchBodyForLog) = await RelayResponseAsync(
                 context,
                 tempOrchResponse,
                 clientRequestsStreaming,
-                groupConfig.OrchestratorModelName!, // For logging within RelayResponseAsync
+                groupConfig.OrchestratorModelName!,
                 _logger);
 
             logEntry.UpstreamResponseBody = finalOrchBodyForLog?.Length > 200000 ? finalOrchBodyForLog.Substring(0, 200000) + "..." : finalOrchBodyForLog;
@@ -584,7 +671,7 @@ public class DispatcherService
             logEntry.ErrorMessage = finalErrorMessage;
             logEntry.UpstreamResponseBody = orchBody?.Length > 200000 ? orchBody.Substring(0, 200000) + "..." : orchBody;
         }
-        logEntry.ProxyResponseStatusCode = context.Response.StatusCode; // Log the final status code sent to client
+        logEntry.ProxyResponseStatusCode = context.Response.StatusCode;
         await LogRequestAsync(logEntry);
     }
 
