@@ -57,10 +57,12 @@ public class ModelGroupConfig
     }
 
     /// <summary>
-    /// List of regular model names that are members of this group.
-    /// These models must be defined in the main 'Models' section of RoutingConfig.
+    /// For Failover, RoundRobin, Weighted: List of member model names.
+    /// For ContentBased: List of member model names available for rules.
+    /// For MixtureOfAgents: List of AGENT model names.
+    /// These models must be defined in the main 'Models' section.
     /// </summary>
-    public List<string> Models { get; set; } = new();
+    public List<string> Models { get; set; } = new(); // Serves as AgentModelNames for MoA
 
     /// <summary>
     /// Rules for 'ContentBased' strategy. Evaluated by 'Priority' (lower first).
@@ -80,6 +82,16 @@ public class ModelGroupConfig
     // Internal state for round-robin on member models (if needed at this level)
     [JsonIgnore]
     internal int CurrentModelIndex { get; set; } = 0; // For RoundRobin/Weighted state on group's models
+
+    // --- Fields for MixtureOfAgents Strategy ---
+    /// <summary>
+    /// The model ID (from the main 'Models' section) that acts as the orchestrator.
+    /// Required if Strategy is MixtureOfAgents.
+    /// </summary>
+    public string? OrchestratorModelName
+    {
+        get; set;
+    }
 }
 
 // NEW: Rule for content-based routing within a model group
@@ -107,7 +119,8 @@ public enum RoutingStrategyType
     Failover,
     RoundRobin,
     Weighted,
-    ContentBased // New strategy, applicable to ModelGroups
+    ContentBased, // New strategy, applicable to ModelGroups
+    MixtureOfAgents // New strategy
 }
 
 // Optional: Model for client-facing error response (Keep as is)
