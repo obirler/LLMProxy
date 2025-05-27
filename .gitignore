@@ -16,6 +16,9 @@
 # Mono auto generated files
 mono_crash.*
 
+#roo code config files
+.roo/
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
