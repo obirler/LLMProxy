@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Assets/logo.png" alt="LLM API Proxy and Manager Logo" height="250" style="display: block; margin-left: auto; margin-right: auto;"/>
+  <img src="Assets/logo_2.png" alt="LLM API Proxy and Manager Logo" height="250" style="display: block; margin-left: auto; margin-right: auto;"/>
 </p>
 
 # LLM API Proxy and Routing Manager
