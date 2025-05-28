@@ -85,7 +85,7 @@ The LLM API Proxy and Manager is a C#-based ASP.NET Core 9 application designed 
 
 1.  **Clone the repository (if applicable):**
     ```bash
-    git clone <repository-url>
+    git clone https://github.com/obirler/LLMProxy.git
     cd LLMProxy 
     ```
     (Or download and extract the source code)
