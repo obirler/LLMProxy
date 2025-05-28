@@ -138,14 +138,14 @@ public class DynamicConfigurationService
         return true;
     }
 
-    public bool DeleteModelConfiguration(string modelName)
+    public bool DeleteModelConfiguration(string modelName) // When deleting a model, remove it from group members/agents
     {
         if (_currentConfig.Models.Remove(modelName))
         {
-            // Also remove this model from any group that might be using it
             foreach (var group in _currentConfig.ModelGroups.Values)
             {
-                group.Models.RemoveAll(m => m == modelName);
+                group.MemberModels.RemoveAll(m => m.Name == modelName);
+                group.AgentModelNames.RemoveAll(name => name == modelName); // For MoA
                 if (group.OrchestratorModelName == modelName)
                     group.OrchestratorModelName = null;
                 if (group.Strategy == RoutingStrategyType.ContentBased)
@@ -174,32 +174,43 @@ public class DynamicConfigurationService
             return false;
         }
 
-        newGroupConfig.Models ??= new List<string>(); // Agent models for MoA, member models otherwise
+        // Initialize new lists if null
+        newGroupConfig.MemberModels ??= new List<ModelMemberConfig>();
+        newGroupConfig.AgentModelNames ??= new List<string>();
         newGroupConfig.ContentRules ??= new List<ContentRule>();
 
-        // --- Validation specific to MixtureOfAgents ---
+        // Validate that member/agent models exist in the main Models configuration
+        var currentModels = _currentConfig.Models; // Get current models from the service's state
+
+        // Validate MemberModels (used by Failover, RR, Weighted, ContentBased targets)
+        foreach (var member in newGroupConfig.MemberModels)
+        {
+            if (string.IsNullOrWhiteSpace(member.Name) || !currentModels.ContainsKey(member.Name))
+            {
+                _logger.LogWarning("Validation failed for group '{GroupName}': MemberModel '{MemberName}' is invalid or does not exist in defined Models.", groupName, member.Name ?? "NULL_NAME");
+                return false;
+            }
+            if (member.Weight < 1)
+                member.Weight = 1; // Ensure weight is at least 1
+        }
+
         if (newGroupConfig.Strategy == RoutingStrategyType.MixtureOfAgents)
         {
-            if (string.IsNullOrWhiteSpace(newGroupConfig.OrchestratorModelName))
+            if (string.IsNullOrWhiteSpace(newGroupConfig.OrchestratorModelName) || !currentModels.ContainsKey(newGroupConfig.OrchestratorModelName))
             {
-                _logger.LogWarning("Validation failed for MoA group '{GroupName}': OrchestratorModelName is required.", groupName);
-                return false; // Orchestrator is mandatory
-            }
-            if (!_currentConfig.Models.ContainsKey(newGroupConfig.OrchestratorModelName))
-            {
-                _logger.LogWarning("Validation failed for MoA group '{GroupName}': OrchestratorModelName '{Orchestrator}' does not exist in defined Models.", groupName, newGroupConfig.OrchestratorModelName);
+                _logger.LogWarning("Validation failed for MoA group '{GroupName}': OrchestratorModelName '{Orchestrator}' is invalid or does not exist.", groupName, newGroupConfig.OrchestratorModelName ?? "NULL");
                 return false;
             }
-            if (newGroupConfig.Models.Count < 2) // `Models` list is used for AgentModelNames here
+            if (newGroupConfig.AgentModelNames.Count < 1) // UI might enforce 2, but allow 1 for programmatic config
             {
-                _logger.LogWarning("Validation failed for MoA group '{GroupName}': At least two Agent Models are required.", groupName);
+                _logger.LogWarning("Validation failed for MoA group '{GroupName}': At least one Agent Model in AgentModelNames is required.", groupName);
                 return false;
             }
-            foreach (var agentModelName in newGroupConfig.Models)
+            foreach (var agentModelName in newGroupConfig.AgentModelNames)
             {
-                if (!_currentConfig.Models.ContainsKey(agentModelName))
+                if (string.IsNullOrWhiteSpace(agentModelName) || !currentModels.ContainsKey(agentModelName))
                 {
-                    _logger.LogWarning("Validation failed for MoA group '{GroupName}': AgentModelName '{AgentModel}' does not exist in defined Models.", groupName, agentModelName);
+                    _logger.LogWarning("Validation failed for MoA group '{GroupName}': AgentModelName '{AgentModel}' in AgentModelNames is invalid or does not exist.", groupName, agentModelName ?? "NULL");
                     return false;
                 }
                 if (agentModelName == newGroupConfig.OrchestratorModelName)
@@ -208,34 +219,42 @@ public class DynamicConfigurationService
                     return false;
                 }
             }
-            // For MoA, ContentRules and DefaultModelForContentBased are not used, clear them.
+            // For MoA, MemberModels, ContentRules and DefaultModelForContentBased are not directly used by the MoA routing logic itself.
+            // Clear them to avoid confusion, or the UI should hide them.
+            newGroupConfig.MemberModels.Clear();
             newGroupConfig.ContentRules.Clear();
             newGroupConfig.DefaultModelForContentBased = null;
         }
-        // --- Validation for ContentBased (existing) ---
         else if (newGroupConfig.Strategy == RoutingStrategyType.ContentBased)
         {
-            newGroupConfig.OrchestratorModelName = null; // Not used for ContentBased
-            // (Existing ContentBased validation logic...)
+            newGroupConfig.OrchestratorModelName = null;
+            newGroupConfig.AgentModelNames.Clear();
+            var currentGroupMemberNames = newGroupConfig.MemberModels.Select(m => m.Name).ToList();
             foreach (var rule in newGroupConfig.ContentRules)
             {
-                if (!newGroupConfig.Models.Contains(rule.TargetModelName))
+                if (!currentGroupMemberNames.Contains(rule.TargetModelName))
                 {
-                    _logger.LogWarning("Invalid TargetModelName '{TargetModel}' in ContentRule for group '{GroupName}'.", rule.TargetModelName, groupName);
+                    _logger.LogWarning("Invalid TargetModelName '{TargetModel}' in ContentRule for group '{GroupName}'. Not in MemberModels.", rule.TargetModelName, groupName);
                     return false;
                 }
             }
-            if (!string.IsNullOrWhiteSpace(newGroupConfig.DefaultModelForContentBased) && !newGroupConfig.Models.Contains(newGroupConfig.DefaultModelForContentBased))
+            if (!string.IsNullOrWhiteSpace(newGroupConfig.DefaultModelForContentBased) && !currentGroupMemberNames.Contains(newGroupConfig.DefaultModelForContentBased))
             {
-                _logger.LogWarning("Invalid DefaultModelForContentBased '{DefaultModel}' for group '{GroupName}'. Clearing it.", newGroupConfig.DefaultModelForContentBased, groupName);
-                newGroupConfig.DefaultModelForContentBased = null;
+                _logger.LogWarning("Invalid DefaultModelForContentBased '{DefaultModel}' for group '{GroupName}'. Not in MemberModels. Clearing it.", newGroupConfig.DefaultModelForContentBased, groupName);
+                newGroupConfig.DefaultModelForContentBased = null; // Or return false
             }
         }
-        else // For Failover, RoundRobin, Weighted
+        else // For Failover, RoundRobin, Weighted (non-MoA, non-ContentBased)
         {
             newGroupConfig.OrchestratorModelName = null;
+            newGroupConfig.AgentModelNames.Clear();
             newGroupConfig.ContentRules.Clear();
             newGroupConfig.DefaultModelForContentBased = null;
+            if (!newGroupConfig.MemberModels.Any() && newGroupConfig.Strategy != RoutingStrategyType.MixtureOfAgents /*MoA handled above*/)
+            {
+                _logger.LogWarning("Validation failed for group '{GroupName}' (Strategy: {Strategy}): At least one MemberModel is required.", groupName, newGroupConfig.Strategy);
+                return false;
+            }
         }
 
         _currentConfig.ModelGroups[groupName] = newGroupConfig;
@@ -261,47 +280,59 @@ public class DynamicConfigurationService
         var defaultConfig = new RoutingConfig
         {
             Models = new Dictionary<string, ModelRoutingConfig>
-            {
-                { "gpt-4-debug", new ModelRoutingConfig { Strategy = RoutingStrategyType.Failover, Backends = new List<BackendConfig> { new BackendConfig { Name = "OpenAI-GPT4-D1", BaseUrl = "https://api.openai.com/v1", ApiKeys = new List<string> { "YOUR_KEY" }, BackendModelName="gpt-4" } } } },
-                { "gpt-3.5-turbo-debug", new ModelRoutingConfig { Strategy = RoutingStrategyType.Failover, Backends = new List<BackendConfig> { new BackendConfig { Name = "OpenAI-GPT35T-D1", BaseUrl = "https://api.openai.com/v1", ApiKeys = new List<string> { "YOUR_KEY" }, BackendModelName="gpt-3.5-turbo" } } } },
-                { "claude-haiku-debug", new ModelRoutingConfig { Strategy = RoutingStrategyType.Failover, Backends = new List<BackendConfig> { new BackendConfig { Name = "Anthropic-Haiku-D1", BaseUrl = "https://api.anthropic.com/v1", ApiKeys = new List<string> { "YOUR_ANTHROPIC_KEY" }, BackendModelName="claude-3-haiku-20240307" } } } }, // Placeholder URL, needs Anthropic SDK or compatible proxy
-                { "phi-3-mini-debug", new ModelRoutingConfig { Strategy = RoutingStrategyType.Failover, Backends = new List<BackendConfig> { new BackendConfig { Name = "LMStudio-Phi3D", BaseUrl = "http://localhost:1234/v1", ApiKeys = new List<string> { "lm-studio" }, BackendModelName = "microsoft/Phi-3-mini-4k-instruct-gguf" } } } }
-            },
+        {
+            { "gpt-4-debug", new ModelRoutingConfig { Strategy = RoutingStrategyType.Failover, Backends = new List<BackendConfig> { new BackendConfig { Name = "OpenAI-GPT4-D1", BaseUrl = "https://api.openai.com/v1", ApiKeys = new List<string> { "YOUR_KEY" }, BackendModelName="gpt-4" } } } },
+            { "gpt-3.5-turbo-debug", new ModelRoutingConfig { Strategy = RoutingStrategyType.Failover, Backends = new List<BackendConfig> { new BackendConfig { Name = "OpenAI-GPT35T-D1", BaseUrl = "https://api.openai.com/v1", ApiKeys = new List<string> { "YOUR_KEY" }, BackendModelName="gpt-3.5-turbo" } } } },
+            { "claude-haiku-debug", new ModelRoutingConfig { Strategy = RoutingStrategyType.Failover, Backends = new List<BackendConfig> { new BackendConfig { Name = "Anthropic-Haiku-D1", BaseUrl = "https://api.anthropic.com/v1", ApiKeys = new List<string> { "YOUR_ANTHROPIC_KEY" }, BackendModelName="claude-3-haiku-20240307" } } } },
+            { "phi-3-mini-debug", new ModelRoutingConfig { Strategy = RoutingStrategyType.Failover, Backends = new List<BackendConfig> { new BackendConfig { Name = "LMStudio-Phi3D", BaseUrl = "http://localhost:1234/v1", ApiKeys = new List<string> { "lm-studio" }, BackendModelName = "microsoft/Phi-3-mini-4k-instruct-gguf" } } } }
+        },
             ModelGroups = new Dictionary<string, ModelGroupConfig>
+        {
             {
-                { "DebugFailoverGroup", new ModelGroupConfig { Strategy = RoutingStrategyType.Failover, Models = new List<string> { "phi-3-mini-debug", "gpt-3.5-turbo-debug" } } },
+                "DebugWeightedGroup", new ModelGroupConfig
                 {
-                    "MoA-Debug-Group", new ModelGroupConfig
+                    Strategy = RoutingStrategyType.Weighted,
+                    MemberModels = new List<ModelMemberConfig> // Use new structure
                     {
-                        Strategy = RoutingStrategyType.MixtureOfAgents,
-                        OrchestratorModelName = "gpt-4-debug", // Must exist in Models
-                        Models = new List<string> { "gpt-3.5-turbo-debug", "claude-haiku-debug" } // Agent models, must exist in Models
+                        new ModelMemberConfig { Name = "phi-3-mini-debug", Weight = 3 }, // phi-3 gets 3x weight
+                        new ModelMemberConfig { Name = "gpt-3.5-turbo-debug", Weight = 1 }
                     }
                 }
+            },
+            {
+                "MoA-Debug-Group", new ModelGroupConfig
+                {
+                    Strategy = RoutingStrategyType.MixtureOfAgents,
+                    OrchestratorModelName = "gpt-4-debug",
+                    AgentModelNames = new List<string> { "gpt-3.5-turbo-debug", "claude-haiku-debug" } // Use AgentModelNames
+                }
             }
+        }
         };
         // Basic validation for default config
         foreach (var groupPair in defaultConfig.ModelGroups.ToList())
         {
             var group = groupPair.Value;
-            group.Models.RemoveAll(modelName => !defaultConfig.Models.ContainsKey(modelName));
+            // Validate MemberModels
+            group.MemberModels.RemoveAll(member => !defaultConfig.Models.ContainsKey(member.Name));
+            // Validate AgentModelNames for MoA
             if (group.Strategy == RoutingStrategyType.MixtureOfAgents)
             {
-                if (string.IsNullOrWhiteSpace(group.OrchestratorModelName) || !defaultConfig.Models.ContainsKey(group.OrchestratorModelName) || group.Models.Count < 1) // Min 1 agent for default, UI will enforce 2
+                group.AgentModelNames.RemoveAll(agentName => !defaultConfig.Models.ContainsKey(agentName));
+                if (string.IsNullOrWhiteSpace(group.OrchestratorModelName) ||
+                    !defaultConfig.Models.ContainsKey(group.OrchestratorModelName) ||
+                    group.AgentModelNames.Count < 1)
                 {
-                    _logger.LogWarning("Default MoA group '{GroupName}' invalid, removing.", groupPair.Key);
+                    _logger.LogWarning("Default MoA group '{GroupName}' invalid (orchestrator or agents), removing.", groupPair.Key);
                     defaultConfig.ModelGroups.Remove(groupPair.Key);
                     continue;
                 }
             }
-            if (!group.Models.Any() && group.Strategy != RoutingStrategyType.MixtureOfAgents) // MoA agents are in Models list
+            else // For non-MoA strategies
             {
-                if (group.Strategy == RoutingStrategyType.MixtureOfAgents && (string.IsNullOrWhiteSpace(group.OrchestratorModelName) || group.Models.Count == 0))
+                if (!group.MemberModels.Any())
                 {
-                } // Already handled
-                else if (group.Strategy != RoutingStrategyType.MixtureOfAgents)
-                {
-                    _logger.LogWarning("Default group '{GroupName}' has no valid member models, removing.", groupPair.Key);
+                    _logger.LogWarning("Default group '{GroupName}' (Strategy: {Strategy}) has no valid member models, removing.", groupPair.Key, group.Strategy);
                     defaultConfig.ModelGroups.Remove(groupPair.Key);
                 }
             }

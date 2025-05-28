@@ -79,9 +79,9 @@ public class RoutingService
     /// For MoA groups, returns the group config itself to signal MoA workflow.
     /// </summary>
     public (string? EffectiveModelName, ModelRoutingConfig? ModelConfig, ModelGroupConfig? GroupConfig) ResolveRoutingConfig(
-        string requestedModelOrGroupName,
-        string originalRequestBody,
-        List<string> triedMemberModelsInGroup)
+    string requestedModelOrGroupName,
+    string originalRequestBody,
+    List<string> triedMemberModelsInGroup) // triedMemberModelsInGroup are model *names*
     {
         var currentFullConfig = _configService.GetCurrentConfig();
 
@@ -91,34 +91,45 @@ public class RoutingService
 
             if (groupConfig.Strategy == RoutingStrategyType.MixtureOfAgents)
             {
-                // Validate MoA config (though DynamicConfigService should also validate on save)
+                // Validate MoA config using AgentModelNames
                 if (string.IsNullOrWhiteSpace(groupConfig.OrchestratorModelName) ||
                     !currentFullConfig.Models.ContainsKey(groupConfig.OrchestratorModelName) ||
-                    groupConfig.Models.Count < 1) // UI/Save enforces >=2 agents, but check for >=1 here for safety
+                    !groupConfig.AgentModelNames.Any()) // Check AgentModelNames for MoA
                 {
-                    _logger.LogError("MixtureOfAgents group '{Name}' is improperly configured (missing orchestrator or agents, or they don't exist in Models).", requestedModelOrGroupName);
-                    return (null, null, null); // Invalid MoA config
-                }
-                bool allAgentsExist = groupConfig.Models.All(agent => currentFullConfig.Models.ContainsKey(agent));
-                if (!allAgentsExist)
-                {
-                    _logger.LogError("MixtureOfAgents group '{Name}' has one or more agent models not defined in the main Models configuration.", requestedModelOrGroupName);
+                    _logger.LogError("MixtureOfAgents group '{Name}' is improperly configured (missing orchestrator or agents in AgentModelNames, or they don't exist in Models).", requestedModelOrGroupName);
                     return (null, null, null);
                 }
-                return (null, null, groupConfig); // Signal MoA workflow to DispatcherService
+                bool allAgentsExist = groupConfig.AgentModelNames.All(agentName => currentFullConfig.Models.ContainsKey(agentName));
+                if (!allAgentsExist)
+                {
+                    _logger.LogError("MixtureOfAgents group '{Name}' has one or more agent models in AgentModelNames not defined in the main Models configuration.", requestedModelOrGroupName);
+                    return (null, null, null);
+                }
+                // For MoA, we also pass the groupConfig.AgentModelNames to DispatcherService through the groupConfig object itself.
+                // The DispatcherService will iterate over groupConfig.AgentModelNames.
+                return (null, null, groupConfig); // Signal MoA workflow
             }
 
-            // --- Handle other group strategies (Failover, RoundRobin, Weighted, ContentBased) ---
+            // --- Handle other group strategies (Failover, RoundRobin, Weighted, ContentBased) using MemberModels ---
             string? chosenMemberModelName = null;
-            var availableMemberModels = groupConfig.Models // groupConfig.Models are the member/agent models.
-                .Where(m => !triedMemberModelsInGroup.Contains(m) && currentFullConfig.Models.ContainsKey(m))
+
+            // Get member models that are enabled, exist in the main Models config, and haven't been tried yet.
+            var availableWeightedMembers = groupConfig.MemberModels
+                .Where(m => m.Enabled &&
+                            !string.IsNullOrWhiteSpace(m.Name) &&
+                            currentFullConfig.Models.ContainsKey(m.Name) &&
+                            !triedMemberModelsInGroup.Contains(m.Name))
                 .ToList();
 
-            if (!availableMemberModels.Any())
+            if (!availableWeightedMembers.Any())
             {
-                _logger.LogWarning("Model Group '{Name}': No available member models left to try or members are not defined in Models config.", requestedModelOrGroupName);
-                return (null, null, groupConfig); // Return groupConfig to indicate group was found but exhausted
+                _logger.LogWarning("Model Group '{Name}': No available member models left to try from MemberModels or members are not defined in Models config.", requestedModelOrGroupName);
+                return (null, null, groupConfig); // Group found but exhausted
             }
+
+            // For strategies other than Weighted, we primarily need the names.
+            // For RoundRobin, we'll pick from availableWeightedMembers then get the name.
+            var availableMemberModelNamesForNonWeighted = availableWeightedMembers.Select(m => m.Name).ToList();
 
             switch (groupConfig.Strategy)
             {
@@ -127,7 +138,7 @@ public class RoutingService
                     if (lastUserMessage != null)
                     {
                         var matchedRule = groupConfig.ContentRules
-                            .Where(r => availableMemberModels.Contains(r.TargetModelName)) // Target must be an available member
+                            .Where(r => availableMemberModelNamesForNonWeighted.Contains(r.TargetModelName)) // Target must be an available member name
                             .OrderBy(r => r.Priority)
                             .FirstOrDefault(r => !string.IsNullOrEmpty(r.RegexPattern) && GetCompiledRegex(r.RegexPattern).IsMatch(lastUserMessage));
 
@@ -138,11 +149,10 @@ public class RoutingService
                                 requestedModelOrGroupName, matchedRule.RegexPattern, chosenMemberModelName);
                         }
                     }
-                    // Fallback for ContentBased if no rule matched or no message
                     if (chosenMemberModelName == null)
                     {
                         if (!string.IsNullOrEmpty(groupConfig.DefaultModelForContentBased) &&
-                            availableMemberModels.Contains(groupConfig.DefaultModelForContentBased))
+                            availableMemberModelNamesForNonWeighted.Contains(groupConfig.DefaultModelForContentBased))
                         {
                             chosenMemberModelName = groupConfig.DefaultModelForContentBased;
                             _logger.LogInformation("ContentBased for group '{Group}': No rule match, using default '{Model}'.",
@@ -150,8 +160,7 @@ public class RoutingService
                         }
                         else
                         {
-                            // Ultimate fallback for ContentBased: Apply Failover to available members
-                            chosenMemberModelName = availableMemberModels.FirstOrDefault();
+                            chosenMemberModelName = availableMemberModelNamesForNonWeighted.FirstOrDefault(); // Fallback to Failover on names
                             _logger.LogInformation("ContentBased for group '{Group}': No rule/default, falling back to Failover, selected '{Model}'.",
                                requestedModelOrGroupName, chosenMemberModelName);
                         }
@@ -159,31 +168,49 @@ public class RoutingService
                     break;
 
                 case RoutingStrategyType.Failover:
-                    chosenMemberModelName = availableMemberModels.FirstOrDefault();
+                    chosenMemberModelName = availableMemberModelNamesForNonWeighted.FirstOrDefault();
                     break;
 
                 case RoutingStrategyType.RoundRobin:
-                    if (availableMemberModels.Any())
+                    if (availableMemberModelNamesForNonWeighted.Any()) // Use names for round robin index
                     {
-                        // Use groupName for the state key for member model round robin
-                        int currentIndex = _roundRobinGroupModelStateIndex.AddOrUpdate(requestedModelOrGroupName, 0, (key, oldValue) => (oldValue + 1) % availableMemberModels.Count);
-                        chosenMemberModelName = availableMemberModels[currentIndex];
+                        int currentIndex = _roundRobinGroupModelStateIndex.AddOrUpdate(requestedModelOrGroupName, 0, (key, oldValue) => (oldValue + 1) % availableMemberModelNamesForNonWeighted.Count);
+                        chosenMemberModelName = availableMemberModelNamesForNonWeighted[currentIndex];
                     }
                     break;
 
-                case RoutingStrategyType.Weighted:
-                    // Simplified Weighted for group members: assumes equal weight (random selection).
-                    // For true weighted, ModelGroupConfig.Models would need to be List<MemberModelWithWeight>.
-                    if (availableMemberModels.Any())
+                case RoutingStrategyType.Weighted: // <<<< NEW WEIGHTED LOGIC FOR GROUPS >>>>
+                    if (availableWeightedMembers.Any())
                     {
-                        chosenMemberModelName = availableMemberModels[Random.Shared.Next(availableMemberModels.Count)];
-                        _logger.LogDebug("Weighted strategy for group '{Group}' members (random selection): chose '{Model}'.", requestedModelOrGroupName, chosenMemberModelName);
+                        // Ensure weights are positive for calculation
+                        int totalWeight = availableWeightedMembers.Sum(m => Math.Max(1, m.Weight));
+                        if (totalWeight <= 0) // Should not happen if weights are at least 1
+                        {
+                            chosenMemberModelName = availableWeightedMembers.First().Name; // Fallback
+                            _logger.LogWarning("Weighted strategy for group '{Group}': Total weight is zero or negative, falling back to first available.", requestedModelOrGroupName);
+                        }
+                        else
+                        {
+                            int randomValue = Random.Shared.Next(1, totalWeight + 1);
+                            int cumulativeWeight = 0;
+                            foreach (var member in availableWeightedMembers)
+                            {
+                                cumulativeWeight += Math.Max(1, member.Weight);
+                                if (randomValue <= cumulativeWeight)
+                                {
+                                    chosenMemberModelName = member.Name;
+                                    break;
+                                }
+                            }
+                            chosenMemberModelName ??= availableWeightedMembers.Last().Name; // Fallback if something went wrong
+                            _logger.LogDebug("Weighted strategy for group '{Group}' members: chose '{ModelName}'.", requestedModelOrGroupName, chosenMemberModelName);
+                        }
                     }
                     break;
 
                 default:
                     _logger.LogWarning("Unsupported strategy '{Strategy}' for model group '{Name}'. Defaulting to Failover.", groupConfig.Strategy, requestedModelOrGroupName);
-                    chosenMemberModelName = availableMemberModels.FirstOrDefault();
+                    chosenMemberModelName = availableMemberModelNamesForNonWeighted.FirstOrDefault();
                     break;
             }
 
@@ -191,15 +218,14 @@ public class RoutingService
             {
                 _logger.LogInformation("Model Group '{Group}' (Strategy: {Strategy}) resolved to member model '{MemberModel}'.",
                     requestedModelOrGroupName, groupConfig.Strategy, chosenMemberModelName);
-                return (chosenMemberModelName, memberModelConfig, groupConfig); // Return chosen model and its config, plus the original group
+                return (chosenMemberModelName, memberModelConfig, groupConfig);
             }
-            _logger.LogWarning("Model Group '{Name}': Could not resolve to a valid member model config (chosen name: {ChosenName}).",
-                requestedModelOrGroupName, chosenMemberModelName ?? "null");
-            return (null, null, groupConfig); // Group found but couldn't pick a valid member
+            _logger.LogWarning("Model Group '{Name}': Could not resolve to a valid member model config (chosen name: {ChosenName}). Tried members: {TriedCount}",
+                requestedModelOrGroupName, chosenMemberModelName ?? "null", triedMemberModelsInGroup.Count);
+            return (null, null, groupConfig);
         }
         else if (currentFullConfig.Models.TryGetValue(requestedModelOrGroupName, out var modelConfig) && modelConfig != null)
         {
-            // It's a direct model request
             return (requestedModelOrGroupName, modelConfig, null);
         }
 

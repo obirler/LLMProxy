@@ -457,55 +457,57 @@ public class DispatcherService
     }
 
     private async Task HandleMoAStrategyAsync(
-        HttpContext context, ApiLogEntry logEntry, string groupName, ModelGroupConfig groupConfig,
-        string originalRequestBody, bool clientRequestsStreaming, string clientRequestPath, string clientRequestMethod)
+    HttpContext context, ApiLogEntry logEntry, string groupName, ModelGroupConfig groupConfig,
+    string originalRequestBody, bool clientRequestsStreaming, string clientRequestPath, string clientRequestMethod)
     {
         _logger.LogInformation("Initiating MoA workflow for group: {GroupName}", groupName);
         logEntry.EffectiveModelName = $"MoA_Group_{groupName}"; // Mark as MoA
 
-        if (string.IsNullOrWhiteSpace(groupConfig.OrchestratorModelName) || !groupConfig.Models.Any())
+        // --- CORRECTED MoA VALIDATION ---
+        if (string.IsNullOrWhiteSpace(groupConfig.OrchestratorModelName) || !groupConfig.AgentModelNames.Any()) // Use AgentModelNames
         {
-            _logger.LogError("MoA group '{GroupName}' critically misconfigured (missing orchestrator or agent models).", groupName);
+            _logger.LogError("MoA group '{GroupName}' critically misconfigured (missing orchestrator or agent models in AgentModelNames).", groupName);
             SetFinalFailureResponse(context, logEntry, "MoA group is misconfigured: missing orchestrator or agent models.");
             await LogRequestAsync(logEntry);
             return;
         }
-        if (groupConfig.Models.Count < 1) // Technically MoA needs agents. Readme suggests min 2.
-        {
-            _logger.LogWarning("MoA group '{GroupName}' has no agent models configured. This will likely fail or produce no result.", groupName);
-            // Depending on strictness, you might want to fail here too.
-            // For now, let it proceed, it will likely fail when agentTasks is empty or all fail.
-        }
+        // You might still want a check for minimum number of agents, e.g., if (groupConfig.AgentModelNames.Count < 2)
+        // For now, the previous check for !Any() covers the case of zero agents.
 
-        JsonNode? originalClientJsonNode = TryParseJson(originalRequestBody); // Parse original client request once
+        JsonNode? originalClientJsonNode = TryParseJson(originalRequestBody);
 
-        var agentTasks = groupConfig.Models.Select(agentModelId =>
+        // --- CORRECTED AGENT SELECTION ---
+        // Iterate over AgentModelNames for MoA
+        var agentTasks = groupConfig.AgentModelNames.Select(agentModelId =>
         {
-            // Construct the base request body for the agent.
-            // For agents, we typically send the original client's messages array.
-            // The 'model' field will be set by ExecuteSingleModelRequestAsync.
-            // Other parameters will be overlaid by ApplyPassthroughParameters within ExecuteSingleModelRequestAsync.
             var agentBasePayloadObject = new JsonObject();
             if (originalClientJsonNode?["messages"] is JsonArray clientMessages)
             {
-                agentBasePayloadObject["messages"] = clientMessages.DeepClone(); // Agents get the full original message history
+                agentBasePayloadObject["messages"] = clientMessages.DeepClone();
             }
-            else if (originalClientJsonNode?["prompt"] is JsonNode clientPrompt) // Handle legacy completion
+            else if (originalClientJsonNode?["prompt"] is JsonNode clientPrompt)
             {
                 agentBasePayloadObject["prompt"] = clientPrompt.DeepClone();
             }
-            // If agents need other specific base parameters not from client, add them here.
 
             return ExecuteSingleModelRequestAsync(
-                  agentModelId,
-                  agentBasePayloadObject.ToJsonString(),
-                  false, // Agents are non-streaming for MoA
-                  clientRequestPath,
-                  clientRequestMethod,
-                  logEntry,
-                  originalClientJsonNode) // Pass parsed original client JSON
-              .ContinueWith(t => (t.Result.success, t.Result.responseBody, agentModelId, t.Result.statusCode, t.Result.errorMessage));
+                    agentModelId,
+                    agentBasePayloadObject.ToJsonString(),
+                    false, // Agents are non-streaming for MoA
+                    clientRequestPath,
+                    clientRequestMethod,
+                    logEntry,
+                    originalClientJsonNode)
+                .ContinueWith(t => (t.Result.success, t.Result.responseBody, agentModelId, t.Result.statusCode, t.Result.errorMessage));
         }).ToList();
+
+        if (!agentTasks.Any()) // Should be caught by AgentModelNames.Any() above, but good safeguard
+        {
+            _logger.LogError("MoA group '{GroupName}' has no agent tasks to execute (AgentModelNames might be empty or all invalid before this point).", groupName);
+            SetFinalFailureResponse(context, logEntry, "MoA group has no configured agents to execute.");
+            await LogRequestAsync(logEntry);
+            return;
+        }
 
         await Task.WhenAll(agentTasks);
 
@@ -521,7 +523,6 @@ public class DispatcherService
                 {
                     var agentJsonNode = JsonNode.Parse(body);
                     string? agentContent = agentJsonNode?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
-                    // For legacy completion responses, the content might be in choices[0].text
                     if (agentContent == null && agentJsonNode?["choices"]?[0]?["text"] is JsonNode textNode)
                     {
                         agentContent = textNode.GetValue<string>();
@@ -563,11 +564,9 @@ public class DispatcherService
             return;
         }
 
-        // --- Build Orchestrator Prompt ---
+        // --- Build Orchestrator Prompt (remains the same) ---
         string systemPromptContent = "You are an expert orchestrator. Your task is to synthesize a final, comprehensive, and accurate answer for the user based on their original query and the responses provided by several specialist agents. Ensure your final answer directly addresses the user's original query, integrating the insights from the agents.";
-
         string userQueryContent = "Could not extract original user query.";
-        // Use the already parsed originalClientJsonNode
         if (originalClientJsonNode?["messages"] is JsonArray messages)
         {
             var lastUserMessage = messages.LastOrDefault(m => m?["role"]?.GetValue<string>() == "user");
@@ -577,7 +576,6 @@ public class DispatcherService
         {
             userQueryContent = promptNode.GetValue<string>() ?? userQueryContent;
         }
-
         var userPromptForOrchestratorBuilder = new StringBuilder();
         userPromptForOrchestratorBuilder.AppendLine($"--- ORIGINAL USER QUERY ---\n{userQueryContent}");
         userPromptForOrchestratorBuilder.AppendLine("\n--- AGENT RESPONSES ---");
@@ -586,53 +584,40 @@ public class DispatcherService
             userPromptForOrchestratorBuilder.AppendLine($"\nAgent [{ar.Key}]:\n{ar.Value}");
         }
         userPromptForOrchestratorBuilder.AppendLine("\n--- FINAL SYNTHESIZED ANSWER ---");
-
         var orchestratorMessages = new JsonArray
     {
         new JsonObject { ["role"] = "system", ["content"] = systemPromptContent },
         new JsonObject { ["role"] = "user", ["content"] = userPromptForOrchestratorBuilder.ToString() }
     };
-
-        // Base payload for orchestrator. 'model', 'stream', and other passthrough parameters
-        // will be handled by ExecuteSingleModelRequestAsync.
         var orchestratorBasePayloadObject = new JsonObject
         {
             ["messages"] = orchestratorMessages
         };
         string orchestratorBaseRequestBody = orchestratorBasePayloadObject.ToJsonString();
 
-        // logEntry.UpstreamRequestBody will be set by ExecuteSingleModelRequestAsync with the final body
         logEntry.EffectiveModelName = groupConfig.OrchestratorModelName;
         _logger.LogInformation("MoA: Preparing to call orchestrator {OrchestratorModel}. Client streaming: {ClientStreaming}",
             groupConfig.OrchestratorModelName, clientRequestsStreaming);
 
         var (orchSuccess, orchBody, orchStatusCode, orchError, orchBackendName) = await ExecuteSingleModelRequestAsync(
             groupConfig.OrchestratorModelName!,
-            orchestratorBaseRequestBody, // Send the base payload (messages only)
-            clientRequestsStreaming,     // Orchestrator call respects client's streaming preference
+            orchestratorBaseRequestBody,
+            clientRequestsStreaming,
             clientRequestPath,
             clientRequestMethod,
             logEntry,
-            originalClientJsonNode);     // Pass parsed original client JSON for passthrough parameter application
-
-        // The final orchestrator request body (with passthrough params) is logged within ExecuteSingleModelRequestAsync.
-        // If you need to update logEntry.UpstreamRequestBody here with the *final* body, you'd need
-        // ExecuteSingleModelRequestAsync to return it, or reconstruct it here.
-        // For now, we assume the log within ExecuteSingleModelRequestAsync is sufficient for the sent body.
+            originalClientJsonNode);
 
         logEntry.UpstreamBackendName = orchBackendName;
         logEntry.UpstreamStatusCode = orchStatusCode;
 
         if (orchSuccess && orchBody != null)
         {
+            // ... (RelayResponseAsync logic as before) ...
             _logger.LogInformation("MoA: Orchestrator {OrchestratorModel} successful. Relaying response to client.", groupConfig.OrchestratorModelName);
-
             HttpStatusCode responseStatusCodeToRelay = orchStatusCode.HasValue ? (HttpStatusCode)orchStatusCode.Value : HttpStatusCode.OK;
             if (responseStatusCodeToRelay == HttpStatusCode.NoContent && clientRequestsStreaming)
             {
-                // Cannot stream a 204, so change to 200 if client expects a stream.
-                // Or, if orchBody is empty, perhaps don't stream.
-                // For now, assume if streaming was requested and orchestrator gave 204, it's an empty stream.
                 _logger.LogWarning("Orchestrator returned 204 NoContent but client requested streaming. Relaying as 200 OK with potentially empty stream body for {OrchestratorModel}.", groupConfig.OrchestratorModelName);
                 responseStatusCodeToRelay = HttpStatusCode.OK;
             }
@@ -640,24 +625,19 @@ public class DispatcherService
             {
                 _logger.LogInformation("Orchestrator returned 204 NoContent for {OrchestratorModel}.", groupConfig.OrchestratorModelName);
             }
-
             using var tempOrchResponse = new HttpResponseMessage(responseStatusCodeToRelay);
             string mediaType = clientRequestsStreaming ? "text/event-stream" : "application/json";
             tempOrchResponse.Content = new StringContent(orchBody, Encoding.UTF8, mediaType);
-            // Add headers that might be expected for streaming if not already handled by RelayResponseAsync
             if (clientRequestsStreaming)
             {
                 tempOrchResponse.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
-                // Connection: keep-alive is usually handled by Kestrel/HttpClient
             }
-
             var (relayCompleted, internalErrorDetectedInContent, finalOrchBodyForLog) = await RelayResponseAsync(
                 context,
                 tempOrchResponse,
                 clientRequestsStreaming,
                 groupConfig.OrchestratorModelName!,
                 _logger);
-
             logEntry.UpstreamResponseBody = finalOrchBodyForLog?.Length > 200000 ? finalOrchBodyForLog.Substring(0, 200000) + "..." : finalOrchBodyForLog;
             logEntry.WasSuccess = relayCompleted && !internalErrorDetectedInContent;
             logEntry.ErrorMessage = internalErrorDetectedInContent ? "Orchestrator response contained an internal error pattern." : (relayCompleted ? null : "Relay of orchestrator response failed or was cancelled.");
