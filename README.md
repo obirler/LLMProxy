@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="Assets/logo.png" alt="LLM API Proxy and Manager Logo" height="250" style="display: block; margin-left: auto; margin-right: auto;"/>
+  <img src="Assets/logo_2.png" alt="LLM API Proxy and Manager Logo" height="250" style="display: block; margin-left: auto; margin-right: auto;"/>
 </p>
 
 # LLM API Proxy and Routing Manager
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![.NET Version](https://img.shields.io/badge/.NET-8.0-blueviolet)](https://dotnet.microsoft.com/download/dotnet/8.0)
+[![.NET Version](https://img.shields.io/badge/.NET-9.0-blueviolet)](https://dotnet.microsoft.com/download/dotnet/9.0)
 [![Language](https://img.shields.io/badge/Language-C%23%2012-blue)](https://learn.microsoft.com/en-us/dotnet/csharp/)
 [![Database](https://img.shields.io/badge/Database-SQLite-blue.svg)](https://www.sqlite.org/)
 
-The LLM API Proxy and Manager is a C#-based ASP.NET Core 8 application designed to serve as an intelligent and resilient intermediary between LLM API clients (e.g., frontend apps, other services) and various OpenAI-compatible backend providers. It centralizes request routing, API key management, error handling, and offers advanced strategies like Model Groups and Mixture of Agents, abstracting backend complexities and ensuring a seamless, uninterrupted, and versatile experience.
+The LLM API Proxy and Manager is a C#-based ASP.NET Core 9 application designed to serve as an intelligent and resilient intermediary between LLM API clients (e.g., frontend apps, other services) and various OpenAI-compatible backend providers. It centralizes request routing, API key management, error handling, and offers advanced strategies like Model Groups and Mixture of Agents, abstracting backend complexities and ensuring a seamless, uninterrupted, and versatile experience.
 
 ## 🚀 Purpose
 
@@ -67,7 +67,7 @@ The LLM API Proxy and Manager is a C#-based ASP.NET Core 8 application designed 
 ## 🛠️ Technical Stack
 
 *   **Language:** C# 12
-*   **Framework:** .NET 8 (ASP.NET Core Minimal API)
+*   **Framework:** .NET 9 (ASP.NET Core Minimal API)
 *   **Database:** SQLite (with Entity Framework Core) for logging.
 *   **Frontend (Admin/Logs):** HTML, Vanilla JavaScript, Bootstrap 5, jQuery (for DataTables).
 *   **Key Dependencies:**
@@ -78,14 +78,14 @@ The LLM API Proxy and Manager is a C#-based ASP.NET Core 8 application designed 
 
 ### Prerequisites
 
-*   [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) installed.
+*   [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) installed.
 *   (Optional) Git for cloning the repository.
 
 ### Installation & Running
 
 1.  **Clone the repository (if applicable):**
     ```bash
-    git clone <repository-url>
+    git clone https://github.com/obirler/LLMProxy.git
     cd LLMProxy 
     ```
     (Or download and extract the source code)

@@ -362,45 +362,143 @@ adminGroupApiGroup.MapGet("/{groupName}", (string groupName, DynamicConfiguratio
 adminGroupApiGroup.MapPost("/{groupName}", (string groupName, [FromBody] ModelGroupConfig groupConfig, DynamicConfigurationService configService, ILogger<Program> logger) =>
 {
     var decodedGroupName = System.Net.WebUtility.UrlDecode(groupName);
-    logger.LogInformation("Received request to update config for model group: {GroupName}", decodedGroupName);
+    logger.LogInformation("Received request to update config for model group: {GroupName}, Strategy: {Strategy}", decodedGroupName, groupConfig.Strategy);
 
-    if (string.IsNullOrWhiteSpace(decodedGroupName) || groupConfig == null)
+    if (string.IsNullOrWhiteSpace(decodedGroupName))
     {
-        logger.LogWarning("Update model group config request failed: Invalid group name or missing body.");
-        return Results.BadRequest("Group name and configuration body are required.");
+        logger.LogWarning("Update model group config request failed: Group name is required.");
+        return Results.BadRequest("Group name is required.");
+    }
+    if (groupConfig == null)
+    {
+        logger.LogWarning("Update model group config request failed for '{GroupName}': Missing configuration body.", decodedGroupName);
+        return Results.BadRequest("Configuration body is required.");
     }
 
-    // Validate that member models in the group exist in the main Models configuration
-    var currentModels = configService.GetCurrentConfig().Models;
-    var invalidMembers = groupConfig.Models.Where(m => !currentModels.ContainsKey(m)).ToList();
-    if (invalidMembers.Any())
+    // Ensure lists are not null, even if empty, to simplify downstream logic in DynamicConfigurationService
+    groupConfig.MemberModels ??= new List<ModelMemberConfig>();
+    groupConfig.AgentModelNames ??= new List<string>();
+    groupConfig.ContentRules ??= new List<ContentRule>();
+
+    var currentModels = configService.GetCurrentConfig().Models; // Get all defined regular models
+
+    // --- Strategy-Specific Validations ---
+
+    if (groupConfig.Strategy == RoutingStrategyType.MixtureOfAgents)
     {
-        logger.LogWarning("Update model group '{GroupName}' failed: Contains member models not defined in main configuration: {InvalidModels}", decodedGroupName, string.Join(", ", invalidMembers));
-        return Results.BadRequest($"The following member models are not defined: {string.Join(", ", invalidMembers)}. Please define them as regular models first.");
-    }
-    // Validate ContentRules' TargetModelName and DefaultModelForContentBased
-    if (groupConfig.Strategy == RoutingStrategyType.ContentBased)
-    {
-        foreach (var rule in groupConfig.ContentRules)
+        // 1. Validate Orchestrator
+        if (string.IsNullOrWhiteSpace(groupConfig.OrchestratorModelName) || !currentModels.ContainsKey(groupConfig.OrchestratorModelName))
         {
-            if (!groupConfig.Models.Contains(rule.TargetModelName))
+            logger.LogWarning("Update MoA group '{GroupName}' failed: Orchestrator model '{OrchestratorName}' is invalid or not defined.",
+                decodedGroupName, groupConfig.OrchestratorModelName ?? "NULL");
+            return Results.BadRequest($"Orchestrator model '{groupConfig.OrchestratorModelName ?? "NULL"}' is invalid or not defined. It must exist as a regular model.");
+        }
+
+        // 2. Validate AgentModelNames
+        if (!groupConfig.AgentModelNames.Any()) // UI might enforce >= 2, but allow >=1 for API
+        {
+            logger.LogWarning("Update MoA group '{GroupName}' failed: At least one agent model is required in AgentModelNames.", decodedGroupName);
+            return Results.BadRequest("MixtureOfAgents strategy requires at least one agent model in AgentModelNames.");
+        }
+        var invalidAgents = groupConfig.AgentModelNames
+            .Where(name => string.IsNullOrWhiteSpace(name) || !currentModels.ContainsKey(name))
+            .ToList();
+        if (invalidAgents.Any())
+        {
+            logger.LogWarning("Update MoA group '{GroupName}' failed: Contains invalid or undefined agent models in AgentModelNames: {InvalidModels}",
+                decodedGroupName, string.Join(", ", invalidAgents));
+            return Results.BadRequest($"The following agent models in AgentModelNames are invalid or not defined: {string.Join(", ", invalidAgents)}. They must exist as regular models.");
+        }
+        // Check if orchestrator is also an agent
+        if (groupConfig.AgentModelNames.Contains(groupConfig.OrchestratorModelName))
+        {
+            logger.LogWarning("Update MoA group '{GroupName}' failed: Orchestrator model '{OrchestratorName}' cannot also be listed as an agent model.",
+                decodedGroupName, groupConfig.OrchestratorModelName);
+            return Results.BadRequest($"The orchestrator model '{groupConfig.OrchestratorModelName}' cannot also be an agent model.");
+        }
+        // For MoA, MemberModels are not used for routing, so we don't need to validate them here for existence,
+        // DynamicConfigurationService might clear them.
+    }
+    else // For Failover, RoundRobin, Weighted, ContentBased (these use MemberModels)
+    {
+        if (!groupConfig.MemberModels.Any())
+        {
+            logger.LogWarning("Update group '{GroupName}' (Strategy: {Strategy}) failed: At least one member model is required in MemberModels.",
+                decodedGroupName, groupConfig.Strategy);
+            return Results.BadRequest($"Strategy '{groupConfig.Strategy}' requires at least one member model in MemberModels.");
+        }
+
+        // Validate each MemberModel in MemberModels
+        var invalidMembers = groupConfig.MemberModels
+            .Where(m => string.IsNullOrWhiteSpace(m.Name) || !currentModels.ContainsKey(m.Name))
+            .ToList();
+        if (invalidMembers.Any())
+        {
+            var invalidNames = invalidMembers.Select(m => m.Name ?? "NULL_NAME");
+            logger.LogWarning("Update group '{GroupName}' failed: MemberModels contains models not defined in main configuration: {InvalidModels}",
+                decodedGroupName, string.Join(", ", invalidNames));
+            return Results.BadRequest($"The following member models in MemberModels are not defined: {string.Join(", ", invalidNames)}. Please define them as regular models first.");
+        }
+
+        // Ensure weights are positive for MemberModels
+        foreach (var member in groupConfig.MemberModels)
+        {
+            if (member.Weight < 1)
             {
-                return Results.BadRequest($"Content rule targets model '{rule.TargetModelName}' which is not a member of group '{decodedGroupName}'.");
+                logger.LogInformation("Adjusting weight for member '{MemberName}' in group '{GroupName}' from {OriginalWeight} to 1.", member.Name, decodedGroupName, member.Weight);
+                member.Weight = 1; // Auto-correct, or could return BadRequest
             }
         }
-        if (!string.IsNullOrWhiteSpace(groupConfig.DefaultModelForContentBased) && !groupConfig.Models.Contains(groupConfig.DefaultModelForContentBased))
+
+        if (groupConfig.Strategy == RoutingStrategyType.ContentBased)
         {
-            return Results.BadRequest($"DefaultModelForContentBased '{groupConfig.DefaultModelForContentBased}' is not a member of group '{decodedGroupName}'.");
+            var currentGroupMemberNames = groupConfig.MemberModels.Where(m => m.Enabled).Select(m => m.Name).ToList();
+            if (!currentGroupMemberNames.Any() && (groupConfig.ContentRules.Any() || !string.IsNullOrWhiteSpace(groupConfig.DefaultModelForContentBased)))
+            {
+                logger.LogWarning("Update ContentBased group '{GroupName}' failed: No enabled member models available for content rules or default model.", decodedGroupName);
+                return Results.BadRequest("ContentBased strategy requires at least one enabled member model if rules or a default model are set.");
+            }
+
+            foreach (var rule in groupConfig.ContentRules)
+            {
+                if (string.IsNullOrWhiteSpace(rule.RegexPattern))
+                {
+                    return Results.BadRequest($"Content rule in group '{decodedGroupName}' is missing a Regex pattern.");
+                }
+                if (string.IsNullOrWhiteSpace(rule.TargetModelName))
+                {
+                    return Results.BadRequest($"Content rule in group '{decodedGroupName}' (Regex: {rule.RegexPattern}) is missing a TargetModelName.");
+                }
+                if (!currentGroupMemberNames.Contains(rule.TargetModelName))
+                {
+                    return Results.BadRequest($"Content rule in group '{decodedGroupName}' targets model '{rule.TargetModelName}', which is not an enabled member of the group.");
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(groupConfig.DefaultModelForContentBased) && !currentGroupMemberNames.Contains(groupConfig.DefaultModelForContentBased))
+            {
+                return Results.BadRequest($"DefaultModelForContentBased '{groupConfig.DefaultModelForContentBased}' in group '{decodedGroupName}' is not an enabled member of the group.");
+            }
         }
     }
 
+    // --- End Strategy-Specific Validations ---
+
     bool success = configService.UpdateModelGroupConfiguration(decodedGroupName, groupConfig);
-    return success
-        ? Results.Ok(new
+
+    if (success)
+    {
+        logger.LogInformation("Successfully updated configuration for model group: {GroupName}", decodedGroupName);
+        return Results.Ok(new
         {
-            Message = $"Configuration for model group '{decodedGroupName}' updated."
-        })
-        : Results.StatusCode(StatusCodes.Status500InternalServerError);
+            Message = $"Configuration for model group '{decodedGroupName}' updated successfully."
+        });
+    }
+    else
+    {
+        // This could be due to file save errors or other issues in DynamicConfigurationService not caught by prior validation
+        logger.LogError("Failed to update configuration for model group: {GroupName} within DynamicConfigurationService.", decodedGroupName);
+        return Results.StatusCode(StatusCodes.Status500InternalServerError);
+    }
 })
 .WithName("UpdateModelGroupConfig");
 

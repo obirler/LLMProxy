@@ -24,4 +24,31 @@
     <Folder Include="wwwroot\lib\jquery\js\" />
   </ItemGroup>
 
+<ItemGroup>
+    <!-- Copy wwwroot and its contents to the output directory -->
+    <Content Update="wwwroot\**\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+
+    <!-- Copy config folder and its contents to the output directory -->
+    <Content Include="config\**\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+
+    <!-- Ensure appsettings.json files are copied -->
+    <Content Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Update="appsettings.Development.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <DependentUpon>appsettings.json</DependentUpon> <!-- Optional, for organization in Solution Explorer -->
+    </Content>
+    <!-- Add appsettings.Production.json if you create one -->
+    <!--
+    <Content Update="appsettings.Production.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <DependentUpon>appsettings.json</DependentUpon>
+    </Content>
+    -->
+  </ItemGroup>
 </Project>

@@ -44,54 +44,55 @@ public class BackendConfig // Existing class
     internal int CurrentApiKeyIndex { get; set; } = 0;
 }
 
-// NEW: Configuration for a Model Group
+public class ModelMemberConfig
+{
+    public string Name { get; set; } = string.Empty; // Name of the model (must exist in main Models dictionary)
+    public int Weight { get; set; } = 1;
+    public bool Enabled { get; set; } = true; // Optional: allow disabling a member without removing
+}
+
+// Configuration for a Model Group
 public class ModelGroupConfig
 {
-    /// <summary>
-    /// Strategy for selecting a model from the 'Models' list within this group.
-    /// Can be Failover, RoundRobin, Weighted, or ContentBased.
-    /// </summary>
     public RoutingStrategyType Strategy
     {
         get; set;
     }
 
     /// <summary>
-    /// For Failover, RoundRobin, Weighted: List of member model names.
-    /// For ContentBased: List of member model names available for rules.
-    /// For MixtureOfAgents: List of AGENT model names.
+    /// For Failover, RoundRobin, Weighted: List of member model configurations (name + weight).
+    /// For ContentBased: List of member model configurations available for rules.
+    /// For MixtureOfAgents: List of AGENT model names (simple strings, as weights aren't typically used for agent selection in basic MoA).
     /// These models must be defined in the main 'Models' section.
     /// </summary>
-    public List<string> Models { get; set; } = new(); // Serves as AgentModelNames for MoA
+    // public List<string> Models { get; set; } = new(); // OLD: This was used for all member/agent lists
+    public List<ModelMemberConfig> MemberModels { get; set; } = new(); // NEW: For strategies that use members (Failover, RR, Weighted, ContentBased targets)
 
     /// <summary>
-    /// Rules for 'ContentBased' strategy. Evaluated by 'Priority' (lower first).
+    /// For MixtureOfAgents: List of AGENT model names (simple strings).
+    /// These models must be defined in the main 'Models' section.
+    /// Weights are not typically applied to MoA agent selection in this manner.
     /// </summary>
+    public List<string> AgentModelNames { get; set; } = new(); // NEW: Specifically for MoA agent models
+
     public List<ContentRule> ContentRules { get; set; } = new();
 
-    /// <summary>
-    /// Optional: For 'ContentBased' strategy, the model to use if no ContentRules match.
-    /// Must be one of the models in the 'Models' list of this group.
-    /// If null and no rules match, 'Failover' will be applied to the group's 'Models'.
-    /// </summary>
     public string? DefaultModelForContentBased
     {
         get; set;
     }
 
-    // Internal state for round-robin on member models (if needed at this level)
     [JsonIgnore]
-    internal int CurrentModelIndex { get; set; } = 0; // For RoundRobin/Weighted state on group's models
+    internal int CurrentModelIndex { get; set; } = 0;
 
-    // --- Fields for MixtureOfAgents Strategy ---
-    /// <summary>
-    /// The model ID (from the main 'Models' section) that acts as the orchestrator.
-    /// Required if Strategy is MixtureOfAgents.
-    /// </summary>
     public string? OrchestratorModelName
     {
         get; set;
     }
+
+    // Helper method to get just the names of enabled member models
+    [JsonIgnore]
+    public List<string> EnabledMemberModelNames => MemberModels.Where(m => m.Enabled).Select(m => m.Name).ToList();
 }
 
 // NEW: Rule for content-based routing within a model group
