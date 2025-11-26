@@ -266,6 +266,26 @@ public class DispatcherService
     }
 
     /// <summary>
+    /// Formats agent responses for inclusion in orchestrator prompt.
+    /// </summary>
+    private string FormatAgentResponses(Dictionary<string, string> agentResponses, string? prefixContent = null)
+    {
+        var builder = new StringBuilder();
+        if (!string.IsNullOrEmpty(prefixContent))
+        {
+            builder.AppendLine(prefixContent);
+            builder.AppendLine();
+        }
+        builder.AppendLine("--- AGENT RESPONSES ---");
+        foreach (var ar in agentResponses)
+        {
+            builder.AppendLine($"\nAgent [{ar.Key}]:\n{ar.Value}");
+        }
+        builder.AppendLine("\n--- FINAL SYNTHESIZED ANSWER ---");
+        return builder.ToString();
+    }
+
+    /// <summary>
     /// Executes a request to a single, specific model, handling its backend selection and retries.
     /// This is used internally for MoA agent/orchestrator calls.
     /// It always attempts to get the full response body.
@@ -571,30 +591,64 @@ public class DispatcherService
         }
 
         // --- Build Orchestrator Prompt ---
+        // Preserve the original conversation history and augment the last user message with agent responses
         string systemPromptContent = "You are an expert orchestrator. Your task is to synthesize a final, comprehensive, and accurate answer for the user based on their original query and the responses provided by several specialist agents. Ensure your final answer directly addresses the user's original query, integrating the insights from the agents.";
-        string userQueryContent = "Could not extract original user query.";
-        if (originalClientJsonNode?["messages"] is JsonArray messages)
+        
+        var orchestratorMessages = new JsonArray();
+        
+        if (originalClientJsonNode?["messages"] is JsonArray clientMessages)
         {
-            var lastUserMessage = messages.LastOrDefault(m => m?["role"]?.GetValue<string>() == "user");
-            userQueryContent = lastUserMessage?["content"]?.GetValue<string>() ?? userQueryContent;
+            // Clone the original conversation history
+            var clonedMessages = clientMessages.DeepClone().AsArray();
+            
+            // Find the last user message and augment it with agent responses
+            for (int i = clonedMessages.Count - 1; i >= 0; i--)
+            {
+                var message = clonedMessages[i];
+                if (message != null && message["role"]?.GetValue<string>() == "user")
+                {
+                    var originalContent = message["content"]?.GetValue<string>() ?? "";
+                    
+                    // Update the last user message with augmented content
+                    message["content"] = FormatAgentResponses(agentResponses, originalContent);
+                    break;
+                }
+            }
+            
+            // Check if there's a system message, if not add our orchestrator system prompt
+            bool hasSystemMessage = clonedMessages.Any(m => m?["role"]?.GetValue<string>() == "system");
+            if (!hasSystemMessage)
+            {
+                // Insert system message at the beginning
+                var systemMessage = new JsonObject { ["role"] = "system", ["content"] = systemPromptContent };
+                clonedMessages.Insert(0, systemMessage);
+            }
+            
+            orchestratorMessages = clonedMessages;
         }
         else if (originalClientJsonNode?["prompt"] is JsonNode promptNode)
         {
-            userQueryContent = promptNode.GetValue<string>() ?? userQueryContent;
+            // Legacy prompt handling: create a new message array with augmented content
+            var promptContent = promptNode.GetValue<string>() ?? "";
+            
+            orchestratorMessages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] = systemPromptContent },
+                new JsonObject { ["role"] = "user", ["content"] = FormatAgentResponses(agentResponses, promptContent) }
+            };
         }
-        var userPromptForOrchestratorBuilder = new StringBuilder();
-        userPromptForOrchestratorBuilder.AppendLine($"--- ORIGINAL USER QUERY ---\n{userQueryContent}");
-        userPromptForOrchestratorBuilder.AppendLine("\n--- AGENT RESPONSES ---");
-        foreach (var ar in agentResponses)
+        else
         {
-            userPromptForOrchestratorBuilder.AppendLine($"\nAgent [{ar.Key}]:\n{ar.Value}");
+            // Fallback: No messages found
+            _logger.LogWarning("MoA: No messages or prompt found in original request. Creating minimal orchestrator payload.");
+            
+            orchestratorMessages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] = systemPromptContent },
+                new JsonObject { ["role"] = "user", ["content"] = FormatAgentResponses(agentResponses) }
+            };
         }
-        userPromptForOrchestratorBuilder.AppendLine("\n--- FINAL SYNTHESIZED ANSWER ---");
-        var orchestratorMessages = new JsonArray
-        {
-            new JsonObject { ["role"] = "system", ["content"] = systemPromptContent },
-            new JsonObject { ["role"] = "user", ["content"] = userPromptForOrchestratorBuilder.ToString() }
-        };
+        
         var orchestratorBasePayloadObject = new JsonObject
         {
             ["messages"] = orchestratorMessages
