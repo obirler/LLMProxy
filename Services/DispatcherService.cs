@@ -266,6 +266,26 @@ public class DispatcherService
     }
 
     /// <summary>
+    /// Formats agent responses for inclusion in orchestrator prompt.
+    /// </summary>
+    private string FormatAgentResponses(Dictionary<string, string> agentResponses, string? prefixContent = null)
+    {
+        var builder = new StringBuilder();
+        if (!string.IsNullOrEmpty(prefixContent))
+        {
+            builder.AppendLine(prefixContent);
+            builder.AppendLine();
+        }
+        builder.AppendLine("--- AGENT RESPONSES ---");
+        foreach (var ar in agentResponses)
+        {
+            builder.AppendLine($"\nAgent [{ar.Key}]:\n{ar.Value}");
+        }
+        builder.AppendLine("\n--- FINAL SYNTHESIZED ANSWER ---");
+        return builder.ToString();
+    }
+
+    /// <summary>
     /// Executes a request to a single, specific model, handling its backend selection and retries.
     /// This is used internally for MoA agent/orchestrator calls.
     /// It always attempts to get the full response body.
@@ -585,23 +605,12 @@ public class DispatcherService
             for (int i = clonedMessages.Count - 1; i >= 0; i--)
             {
                 var message = clonedMessages[i];
-                if (message?["role"]?.GetValue<string>() == "user")
+                if (message != null && message["role"]?.GetValue<string>() == "user")
                 {
                     var originalContent = message["content"]?.GetValue<string>() ?? "";
                     
-                    // Build the augmented content with agent responses
-                    var augmentedContentBuilder = new StringBuilder();
-                    augmentedContentBuilder.AppendLine(originalContent);
-                    augmentedContentBuilder.AppendLine();
-                    augmentedContentBuilder.AppendLine("--- AGENT RESPONSES ---");
-                    foreach (var ar in agentResponses)
-                    {
-                        augmentedContentBuilder.AppendLine($"\nAgent [{ar.Key}]:\n{ar.Value}");
-                    }
-                    augmentedContentBuilder.AppendLine("\n--- FINAL SYNTHESIZED ANSWER ---");
-                    
                     // Update the last user message with augmented content
-                    message!["content"] = augmentedContentBuilder.ToString();
+                    message["content"] = FormatAgentResponses(agentResponses, originalContent);
                     break;
                 }
             }
@@ -621,38 +630,22 @@ public class DispatcherService
         {
             // Legacy prompt handling: create a new message array with augmented content
             var promptContent = promptNode.GetValue<string>() ?? "";
-            var augmentedContentBuilder = new StringBuilder();
-            augmentedContentBuilder.AppendLine(promptContent);
-            augmentedContentBuilder.AppendLine();
-            augmentedContentBuilder.AppendLine("--- AGENT RESPONSES ---");
-            foreach (var ar in agentResponses)
-            {
-                augmentedContentBuilder.AppendLine($"\nAgent [{ar.Key}]:\n{ar.Value}");
-            }
-            augmentedContentBuilder.AppendLine("\n--- FINAL SYNTHESIZED ANSWER ---");
             
             orchestratorMessages = new JsonArray
             {
                 new JsonObject { ["role"] = "system", ["content"] = systemPromptContent },
-                new JsonObject { ["role"] = "user", ["content"] = augmentedContentBuilder.ToString() }
+                new JsonObject { ["role"] = "user", ["content"] = FormatAgentResponses(agentResponses, promptContent) }
             };
         }
         else
         {
             // Fallback: No messages found
             _logger.LogWarning("MoA: No messages or prompt found in original request. Creating minimal orchestrator payload.");
-            var fallbackContentBuilder = new StringBuilder();
-            fallbackContentBuilder.AppendLine("--- AGENT RESPONSES ---");
-            foreach (var ar in agentResponses)
-            {
-                fallbackContentBuilder.AppendLine($"\nAgent [{ar.Key}]:\n{ar.Value}");
-            }
-            fallbackContentBuilder.AppendLine("\n--- FINAL SYNTHESIZED ANSWER ---");
             
             orchestratorMessages = new JsonArray
             {
                 new JsonObject { ["role"] = "system", ["content"] = systemPromptContent },
-                new JsonObject { ["role"] = "user", ["content"] = fallbackContentBuilder.ToString() }
+                new JsonObject { ["role"] = "user", ["content"] = FormatAgentResponses(agentResponses) }
             };
         }
         
