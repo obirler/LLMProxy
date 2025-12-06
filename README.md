@@ -11,6 +11,48 @@
 
 The LLM API Proxy and Manager is a C#-based ASP.NET Core 9 application designed to serve as an intelligent and resilient intermediary between LLM API clients (e.g., frontend apps, other services) and various OpenAI-compatible backend providers. It centralizes request routing, API key management, error handling, and offers advanced strategies like Model Groups and Mixture of Agents, abstracting backend complexities and ensuring a seamless, uninterrupted, and versatile experience.
 
+## 📚 Table of Contents
+
+- [Purpose](#-purpose)
+- [Key Features](#-key-features)
+- [Technical Stack](#️-technical-stack)
+- [Project Structure](#-project-structure)
+- [Architecture & Flow Diagrams](#-architecture--flow-diagrams)
+- [Developer Guide](#-developer-guide)
+- [Getting Started](#️-getting-started)
+- [API Endpoints](#-api-endpoints)
+- [Configuration Details](#-configuration-details-dynamic_routingjson)
+- [Usage Examples](#-usage-examples)
+- [Troubleshooting](#-troubleshooting)
+- [Potential Future Enhancements](#-potential-future-enhancements)
+- [Deployment](#-deployment)
+- [Use Cases](#-use-cases)
+- [License](#-license)
+- [Acknowledgements](#-acknowledgements)
+
+## ⭐ Quick Highlights
+
+```bash
+# Install and run in under 5 minutes
+git clone https://github.com/obirler/LLMProxy.git
+cd LLMProxy
+dotnet restore && dotnet build
+dotnet ef database update
+dotnet run
+
+# Access admin interface
+open http://localhost:7548/admin
+```
+
+**What makes LLMProxy special?**
+- 🎯 **Zero Code Changes**: Switch between GPT-4, Claude, Gemini, or local models without touching your app
+- 🛡️ **Bulletproof Resilience**: Automatic failover, multiple API keys, and intelligent error handling
+- 🤖 **Mixture of Agents**: Combine responses from multiple AI models for superior results
+- 📊 **Smart Routing**: Content-based routing, weighted distribution, and round-robin strategies
+- 🔍 **Full Observability**: Every request logged to SQLite for debugging and analytics
+- ⚡ **Streaming Support**: Low-latency proxy for real-time token streaming
+- 🎨 **Web-Based Admin**: Configure everything through an intuitive UI - no config file editing
+
 ## 🚀 Purpose
 
 *   **Aggregate Multiple LLM Backends:** Consolidate access to various OpenAI-compatible APIs (e.g., OpenAI, OpenRouter, Google Gemini, Mistral, DeepSeek, local LM Studio instances).
@@ -301,6 +343,84 @@ public enum GroupRoutingStrategyType
 ```
 
 ## 🔄 Architecture & Flow Diagrams
+
+### High-Level Architecture Overview
+
+```mermaid
+graph TB
+    subgraph "Client Applications"
+        WebApp[Web Application]
+        MobileApp[Mobile App]
+        CLI[CLI Tools]
+        Script[Scripts/Bots]
+    end
+    
+    subgraph "LLM Proxy (This Application)"
+        API[API Layer<br/>Program.cs]
+        
+        subgraph "Core Services"
+            Dispatcher[DispatcherService<br/>HTTP Forwarding & Streaming]
+            Router[RoutingService<br/>Strategy Selection]
+            Config[DynamicConfigurationService<br/>Config Management]
+        end
+        
+        AdminUI[Admin Web UI<br/>Configuration]
+        LogUI[Log Viewer UI<br/>Debugging]
+        
+        DB[(SQLite DB<br/>Request Logs)]
+        ConfigFile[dynamic_routing.json]
+    end
+    
+    subgraph "LLM Backend Providers"
+        OpenAI[OpenAI API<br/>GPT-4, GPT-3.5]
+        Anthropic[Anthropic API<br/>Claude]
+        Google[Google AI<br/>Gemini]
+        OpenRouter[OpenRouter<br/>Multiple Models]
+        Local[Local LM Studio<br/>Llama, Mistral]
+        Other[Other OpenAI-Compatible<br/>APIs]
+    end
+    
+    WebApp -->|OpenAI-Compatible Request| API
+    MobileApp -->|OpenAI-Compatible Request| API
+    CLI -->|OpenAI-Compatible Request| API
+    Script -->|OpenAI-Compatible Request| API
+    
+    API --> Dispatcher
+    Dispatcher --> Router
+    Router --> Config
+    Config --> ConfigFile
+    
+    Dispatcher -->|Log| DB
+    
+    Dispatcher -->|Proxy Request| OpenAI
+    Dispatcher -->|Proxy Request| Anthropic
+    Dispatcher -->|Proxy Request| Google
+    Dispatcher -->|Proxy Request| OpenRouter
+    Dispatcher -->|Proxy Request| Local
+    Dispatcher -->|Proxy Request| Other
+    
+    OpenAI -->|Response| Dispatcher
+    Anthropic -->|Response| Dispatcher
+    Google -->|Response| Dispatcher
+    OpenRouter -->|Response| Dispatcher
+    Local -->|Response| Dispatcher
+    Other -->|Response| Dispatcher
+    
+    Dispatcher -->|Stream/Return| API
+    API -->|Response| WebApp
+    API -->|Response| MobileApp
+    API -->|Response| CLI
+    API -->|Response| Script
+    
+    AdminUI --> Config
+    LogUI --> DB
+    
+    style API fill:#4CAF50
+    style Dispatcher fill:#2196F3
+    style Router fill:#FF9800
+    style Config fill:#9C27B0
+    style DB fill:#607D8B
+```
 
 ### Request Routing Flow
 
