@@ -15,11 +15,11 @@ The LLM API Proxy and Manager is a C#-based ASP.NET Core 9 application designed 
 
 - [Purpose](#-purpose)
 - [Key Features](#-key-features)
-- [Technical Stack](#️-technical-stack)
+- [Technical Stack](#%EF%B8%8F-technical-stack)
 - [Project Structure](#-project-structure)
 - [Architecture & Flow Diagrams](#-architecture--flow-diagrams)
 - [Developer Guide](#-developer-guide)
-- [Getting Started](#️-getting-started)
+- [Getting Started](#%EF%B8%8F-getting-started)
 - [API Endpoints](#-api-endpoints)
 - [Configuration Details](#-configuration-details-dynamic_routingjson)
 - [Usage Examples](#-usage-examples)
