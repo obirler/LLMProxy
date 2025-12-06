@@ -9,7 +9,9 @@
 [![Language](https://img.shields.io/badge/Language-C%23%2012-blue)](https://learn.microsoft.com/en-us/dotnet/csharp/)
 [![Database](https://img.shields.io/badge/Database-SQLite-blue.svg)](https://www.sqlite.org/)
 
-The LLM API Proxy and Manager is a C#-based ASP.NET Core 9 application designed to serve as an intelligent and resilient intermediary between LLM API clients (e.g., frontend apps, other services) and various OpenAI-compatible backend providers. It centralizes request routing, API key management, error handling, and offers advanced strategies like Model Groups and Mixture of Agents, abstracting backend complexities and ensuring a seamless, uninterrupted, and versatile experience.
+The LLM API Proxy and Manager is a C#-based ASP.NET Core 9 application designed to serve as an intelligent and resilient intermediary between LLM API clients and various OpenAI-compatible backend providers. 
+
+It centralizes request routing, API key management, and error handling while offering advanced strategies like Model Groups and Mixture of Agents. By abstracting backend complexities, it ensures a seamless, uninterrupted, and versatile experience for your applications.
 
 ## 📚 Table of Contents
 
@@ -1046,13 +1048,14 @@ Since there's no formal test suite, manual testing is essential:
     ```
     The proxy will start, typically listening on `http://localhost:7548`
     
-    You should see output like:
+    You should see output similar to this (indicating successful startup):
     ```
     info: Microsoft.Hosting.Lifetime[14]
           Now listening on: http://localhost:7548
     info: Microsoft.Hosting.Lifetime[0]
           Application started. Press Ctrl+C to shut down.
     ```
+    The application is now ready to accept requests on port 7548.
 
 6.  **Verify Installation:**
     ```bash
@@ -1690,15 +1693,35 @@ server {
 ```bash
 #!/bin/bash
 # backup-llmproxy.sh
+# Prerequisites: sqlite3 command must be installed
+# Run with appropriate permissions to read source files and write to backup directory
 
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_DIR="/backups/llmproxy"
 
-# Backup configuration
-cp config/dynamic_routing.json "$BACKUP_DIR/config_$DATE.json"
+# Ensure backup directory exists
+mkdir -p "$BACKUP_DIR"
 
-# Backup database
-sqlite3 data/llmproxy_log.db ".backup '$BACKUP_DIR/logs_$DATE.db'"
+# Backup configuration (check if file exists)
+if [ -f config/dynamic_routing.json ]; then
+    cp config/dynamic_routing.json "$BACKUP_DIR/config_$DATE.json"
+    echo "Config backed up: $BACKUP_DIR/config_$DATE.json"
+else
+    echo "Warning: config/dynamic_routing.json not found"
+fi
+
+# Backup database (requires sqlite3 command)
+if command -v sqlite3 &> /dev/null; then
+    if [ -f data/llmproxy_log.db ]; then
+        sqlite3 data/llmproxy_log.db ".backup '$BACKUP_DIR/logs_$DATE.db'"
+        echo "Database backed up: $BACKUP_DIR/logs_$DATE.db"
+    else
+        echo "Warning: data/llmproxy_log.db not found"
+    fi
+else
+    echo "Error: sqlite3 command not found. Install with: apt-get install sqlite3"
+    exit 1
+fi
 
 # Keep only last 30 days of backups
 find "$BACKUP_DIR" -type f -mtime +30 -delete
