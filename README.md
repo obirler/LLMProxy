@@ -158,11 +158,11 @@ LLMProxy/
 │   ├── icon.ico                    # Favicon
 │   └── lib/                        # Frontend libraries (Bootstrap, jQuery, etc.)
 │
-├── config/                         # Runtime configuration (created on first run)
-│   └── dynamic_routing.json        # Dynamic routing configuration
+├── config/                         # Runtime configuration (auto-created on first launch)
+│   └── dynamic_routing.json        # Dynamic routing configuration (not in repo)
 │
-├── data/                           # Runtime data (created on first run)
-│   └── llmproxy_log.db            # SQLite database for logging
+├── data/                           # Runtime data (auto-created on first launch)
+│   └── llmproxy_log.db            # SQLite database for logging (not in repo)
 │
 ├── Program.cs                      # Application entry point and API endpoints
 ├── LLMProxy.csproj                 # Project file with dependencies
@@ -944,11 +944,13 @@ curl http://localhost:7548/v1/chat/completions \
    Configure Kestrel for HTTPS in `appsettings.json`
 
 5. **Protect API Keys**
-   - Never commit `dynamic_routing.json` with real keys to version control
-   - Add to `.gitignore`:
-     ```
-     config/dynamic_routing.json
-     data/llmproxy_log.db
+   - The `config/` and `data/` directories are auto-created at runtime and already excluded from version control
+   - Never commit production configurations with real API keys
+   - When sharing configurations, use placeholder keys or environment variable references
+   - Consider using environment variables for sensitive API keys:
+     ```bash
+     export OPENAI_API_KEY="sk-your-key-here"
+     # Reference in config as ${OPENAI_API_KEY} if implementing env var support
      ```
 
 ### Testing Your Changes
@@ -1025,16 +1027,20 @@ Since there's no formal test suite, manual testing is essential:
     dotnet build
     ```
 
-3.  **Database Migration:**
+3.  **Install EF Core Tools (if not already installed):**
+    ```bash
+    dotnet tool install --global dotnet-ef
+    ```
+
+4.  **Apply Database Migrations:**
     The application uses EF Core for database logging. Migrations need to be applied:
     ```bash
     dotnet ef database update
     ```
-    > **Note**: This command requires the EF Core tools. Install with: `dotnet tool install --global dotnet-ef`
     
     If you downloaded a release, the database might be pre-configured or created automatically on first run.
 
-4.  **Run the Application:**
+5.  **Run the Application:**
     ```bash
     dotnet run
     ```
@@ -1048,7 +1054,7 @@ Since there's no formal test suite, manual testing is essential:
           Application started. Press Ctrl+C to shut down.
     ```
 
-5.  **Verify Installation:**
+6.  **Verify Installation:**
     ```bash
     # Check health endpoint
     curl http://localhost:7548/health
@@ -1057,7 +1063,7 @@ Since there's no formal test suite, manual testing is essential:
     curl http://localhost:7548/v1/models
     ```
 
-6.  **Access Admin Interface:**
+7.  **Access Admin Interface:**
     Open your browser and navigate to:
     ```
     http://localhost:7548/admin
